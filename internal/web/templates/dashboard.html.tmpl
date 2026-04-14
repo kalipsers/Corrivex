@@ -849,13 +849,16 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
         <h2 class="h2">Allowed domains</h2>
       </div>
       <div class="toolbar-right">
-        <input type="text" class="input" id="new-domain" placeholder="contoso.local" aria-label="New domain">
+        <input type="text" class="input" id="new-domain" placeholder="contoso.local  or  *  to allow any" aria-label="New domain">
         <input type="text" class="input" id="new-domain-notes" placeholder="Notes (optional)" aria-label="Notes" style="min-width:200px">
         <button class="btn btn-primary" id="add-domain-btn">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
           Add domain
         </button>
       </div>
+    </div>
+    <div class="sub" style="color:var(--c-muted);font-size:12px;margin:-8px 0 12px">
+      Add the AD domain (or <code>WORKGROUP</code> for stand-alone Windows boxes) of every endpoint you want to enroll. Use a literal <code>*</code> entry to permit any domain — useful for closed networks where the dashboard is the only access control.
     </div>
     <div class="card">
       <div class="tbl-wrap">

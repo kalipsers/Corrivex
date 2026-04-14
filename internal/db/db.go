@@ -472,6 +472,16 @@ func (d *DB) IsDomainAllowed(domain string) (bool, error) {
 	if !d.cfg.CheckDom {
 		return true, nil
 	}
+	// Wildcard short-circuit: a single literal '*' row in allowed_domains
+	// means "any domain (including empty) is permitted to enroll" — useful
+	// for closed networks where the dashboard is the only access control.
+	var hasWild int
+	if err := d.sql.QueryRow("SELECT COUNT(*) FROM allowed_domains WHERE domain='*'").Scan(&hasWild); err != nil {
+		return false, err
+	}
+	if hasWild > 0 {
+		return true, nil
+	}
 	domain = strings.ToLower(strings.TrimSpace(domain))
 	if domain == "" {
 		return false, nil

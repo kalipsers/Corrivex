@@ -55,6 +55,26 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.2.0 — Wildcard domain whitelist
+
+**Minor**
+
+- Allowed-domains list now honours a single literal `*` entry as a wildcard:
+  any domain (including empty) is permitted to enroll. Useful for closed
+  networks where the dashboard is the only access control. Add or remove the
+  `*` row from the dashboard's **Allowed domains** tab as you would any other
+  entry. Existing per-domain entries continue to work unchanged.
+- Dashboard placeholder + hint on the Allowed-domains tab now mentions the
+  wildcard so it's discoverable.
+
+**Patch**
+
+- `scripts/bump-version.sh` writes JSON and Markdown as explicit UTF-8 so
+  non-ASCII strings (em-dash, ©) round-trip cleanly on Windows-hosted
+  toolchains. The script also probes Python interpreters with `--version`
+  before using them, skipping the Microsoft Store stub at
+  `C:\…\WindowsApps\python.exe`.
+
 ### 1.1.1 — CI / Release pipeline
 
 **Patch** — internal infrastructure, no runtime change.
