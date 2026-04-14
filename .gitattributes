@@ -1,0 +1,32 @@
+# Normalize line endings — the repo stores LF, checkout converts only the
+# files that need CRLF on Windows.
+
+* text=auto eol=lf
+
+# Files that MUST be LF regardless of OS (shell, Makefile, Go).
+*.sh         text eol=lf
+*.go         text eol=lf
+*.tmpl       text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+*.json       text eol=lf
+Makefile     text eol=lf
+Dockerfile   text eol=lf
+.env.example text eol=lf
+
+# Files that MUST be CRLF (Windows-native scripts).
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary — never diff or normalize.
+*.exe   binary
+*.syso  binary
+*.zip   binary
+*.gz    binary
+*.tgz   binary
+*.png   binary
+*.jpg   binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary

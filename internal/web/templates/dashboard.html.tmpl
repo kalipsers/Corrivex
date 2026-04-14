@@ -1,0 +1,2149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Corrivex</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  /* Trust & Authority palette */
+  --c-primary:   #0F172A;
+  --c-secondary: #334155;
+  --c-cta:       #0369A1;
+  --c-cta-hover: #075985;
+  --c-bg:        #F8FAFC;
+  --c-surface:   #FFFFFF;
+  --c-text:      #020617;
+  --c-text-2:    #334155;
+  --c-muted:     #64748B;
+  --c-border:    #E2E8F0;
+  --c-border-2:  #CBD5E1;
+  --c-success:   #047857;
+  --c-success-bg:#ECFDF5;
+  --c-warning:   #B45309;
+  --c-warning-bg:#FFFBEB;
+  --c-danger:    #B91C1C;
+  --c-danger-bg: #FEF2F2;
+  --c-info:      #0369A1;
+  --c-info-bg:   #EFF6FF;
+
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+
+  --shadow-sm: 0 1px 2px 0 rgba(15,23,42,.04);
+  --shadow-md: 0 4px 12px -2px rgba(15,23,42,.08), 0 2px 4px -2px rgba(15,23,42,.04);
+  --shadow-lg: 0 20px 40px -12px rgba(15,23,42,.15), 0 8px 16px -8px rgba(15,23,42,.08);
+
+  --ease: cubic-bezier(.4,0,.2,1);
+  --d-fast: 150ms;
+  --d-med:  220ms;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *,*::before,*::after { transition: none !important; animation: none !important; } }
+body {
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Typography scale */
+h1, .h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.015em; color: var(--c-primary); }
+h2, .h2 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; color: var(--c-primary); }
+h3, .h3 { font-size: 15px; font-weight: 600; color: var(--c-primary); }
+.eyebrow { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--c-muted); }
+.mono { font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; }
+a { color: var(--c-cta); text-decoration: none; }
+a:hover { color: var(--c-cta-hover); text-decoration: underline; }
+
+/* Focus ring */
+:focus-visible {
+  outline: 2px solid var(--c-cta);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* Top bar */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
+  backdrop-filter: saturate(1.6);
+}
+.topbar-inner {
+  max-width: 1440px; margin: 0 auto;
+  padding: 14px 24px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-mark {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: linear-gradient(135deg, var(--c-primary), var(--c-secondary));
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; box-shadow: var(--shadow-sm);
+}
+.brand-name { font-weight: 700; font-size: 16px; letter-spacing: -0.015em; color: var(--c-primary); }
+.brand-tag {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--c-muted); padding: 2px 8px; border: 1px solid var(--c-border);
+  border-radius: 999px; background: var(--c-bg);
+}
+.topbar-right { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--c-text-2); }
+.badge-secure {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; font-size: 11px; font-weight: 600;
+  color: var(--c-success); background: var(--c-success-bg);
+  border: 1px solid #A7F3D0; border-radius: 999px;
+  transition: transform var(--d-fast) var(--ease);
+}
+.badge-secure:hover { transform: translateY(-1px); }
+.badge-secure svg { width: 12px; height: 12px; }
+
+/* Container */
+.wrap { max-width: 1440px; margin: 0 auto; padding: 28px 24px 80px; }
+
+/* Stats strip */
+.stats {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+  margin-bottom: 28px;
+}
+.stat {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-sm);
+  position: relative; overflow: hidden;
+  transition: box-shadow var(--d-med) var(--ease), transform var(--d-med) var(--ease);
+}
+.stat:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.stat::before {
+  content: ''; position: absolute; inset: 0 0 auto 0; height: 3px;
+  background: var(--c-border-2);
+}
+.stat.is-total::before   { background: var(--c-primary); }
+.stat.is-updates::before { background: var(--c-warning); }
+.stat.is-ok::before      { background: var(--c-success); }
+.stat.is-new::before     { background: var(--c-info); }
+.stat-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--c-muted); margin-bottom: 6px;
+  display: flex; align-items: center; gap: 8px;
+}
+.stat-label svg { width: 14px; height: 14px; }
+.stat-value {
+  font-size: 32px; font-weight: 700; letter-spacing: -0.02em;
+  color: var(--c-primary); line-height: 1; margin-bottom: 8px;
+  opacity: 0; transform: translateY(4px);
+  animation: statReveal 600ms var(--ease) forwards;
+}
+@keyframes statReveal { to { opacity: 1; transform: none; } }
+.stat-hint { font-size: 12px; color: var(--c-muted); }
+.stat.is-updates .pulse {
+  display: inline-block; width: 8px; height: 8px; border-radius: 999px;
+  background: var(--c-warning); margin-left: 6px;
+  animation: pulse 2s var(--ease) infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .55; transform: scale(1.25); } }
+
+/* Tabs */
+.tabs {
+  display: flex; gap: 4px; border-bottom: 1px solid var(--c-border);
+  margin-bottom: 20px; padding: 0 2px;
+}
+.tab {
+  appearance: none; background: none; border: none;
+  padding: 10px 14px; font: inherit; font-weight: 500; color: var(--c-text-2);
+  cursor: pointer; border-bottom: 2px solid transparent;
+  transition: color var(--d-fast) var(--ease), border-color var(--d-fast) var(--ease);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.tab:hover { color: var(--c-primary); }
+.tab svg { width: 16px; height: 16px; }
+.tab.is-active { color: var(--c-primary); border-bottom-color: var(--c-cta); }
+.tab-panel { display: none; }
+.tab-panel.is-active { display: block; }
+
+/* Toolbar */
+.toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; margin-bottom: 16px; flex-wrap: wrap;
+}
+.toolbar-left, .toolbar-right { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.input {
+  font: inherit; font-size: 13px;
+  padding: 8px 12px; border: 1px solid var(--c-border-2);
+  border-radius: var(--r-md); background: var(--c-surface); color: var(--c-text);
+  min-width: 240px;
+  transition: border-color var(--d-fast) var(--ease), box-shadow var(--d-fast) var(--ease);
+}
+.input:hover { border-color: var(--c-muted); }
+.input:focus { border-color: var(--c-cta); box-shadow: 0 0 0 3px rgba(3,105,161,.15); outline: none; }
+.input::placeholder { color: var(--c-muted); }
+
+/* Buttons */
+.btn {
+  appearance: none; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 500;
+  padding: 8px 14px; border-radius: var(--r-md);
+  border: 1px solid var(--c-border-2); background: var(--c-surface); color: var(--c-text);
+  display: inline-flex; align-items: center; gap: 8px;
+  transition: background var(--d-fast) var(--ease), border-color var(--d-fast) var(--ease),
+    color var(--d-fast) var(--ease), box-shadow var(--d-fast) var(--ease);
+}
+.btn:hover { background: #F1F5F9; border-color: var(--c-muted); }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+.btn svg { width: 14px; height: 14px; }
+.btn-primary { background: var(--c-cta); border-color: var(--c-cta); color: #fff; }
+.btn-primary:hover { background: var(--c-cta-hover); border-color: var(--c-cta-hover); }
+.btn-dark { background: var(--c-primary); border-color: var(--c-primary); color: #fff; }
+.btn-dark:hover { background: #1E293B; border-color: #1E293B; }
+.btn-danger { background: var(--c-surface); border-color: #FECACA; color: var(--c-danger); }
+.btn-danger:hover { background: var(--c-danger-bg); border-color: var(--c-danger); }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--c-text-2); }
+.btn-ghost:hover { background: #F1F5F9; color: var(--c-primary); }
+.btn-sm { padding: 5px 10px; font-size: 12px; border-radius: var(--r-sm); }
+.btn-block { width: 100%; justify-content: center; }
+
+/* Card */
+.card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+}
+.card-hd {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--c-border);
+}
+.card-bd { padding: 20px; }
+.card-empty {
+  padding: 40px 20px; text-align: center; color: var(--c-muted); font-size: 13px;
+}
+
+/* Table */
+.tbl-wrap { overflow-x: auto; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th, .tbl td {
+  text-align: left; padding: 12px 16px;
+  border-bottom: 1px solid var(--c-border); vertical-align: middle;
+}
+.tbl thead th {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--c-muted);
+  background: #F8FAFC; position: sticky; top: 0;
+}
+.tbl tbody tr { transition: background var(--d-fast) var(--ease); }
+.tbl tbody tr:hover { background: #F8FAFC; }
+.tbl tbody tr.is-clickable { cursor: pointer; }
+.tbl td .hostname { font-weight: 600; color: var(--c-primary); }
+.tbl td .sub { font-size: 11px; color: var(--c-muted); margin-top: 2px; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; font-size: 11px; font-weight: 600;
+  border-radius: 999px; border: 1px solid var(--c-border-2);
+  background: var(--c-bg); color: var(--c-text-2);
+  line-height: 1.4;
+}
+.chip.ok { color: var(--c-success); background: var(--c-success-bg); border-color: #A7F3D0; }
+.chip.warn { color: var(--c-warning); background: var(--c-warning-bg); border-color: #FDE68A; }
+.chip.danger { color: var(--c-danger); background: var(--c-danger-bg); border-color: #FECACA; }
+.chip.info { color: var(--c-info); background: var(--c-info-bg); border-color: #BFDBFE; }
+.chip.muted { color: var(--c-muted); background: var(--c-bg); }
+.chip .dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* OS column: allow wrapping so long captions like
+   "Microsoft Windows 11 Pro for Workstations 10.0.26200" don't blow up the
+   table width. */
+.tbl td.os-cell {
+  max-width: 220px;
+  white-space: normal;
+  word-wrap: break-word;
+  word-break: break-word;
+  line-height: 1.35;
+}
+
+/* Updates column: two stacked source chips so winget and WU read at a glance. */
+.upd-stack { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.upd-stack .chip { font-size: 10.5px; padding: 1px 8px; }
+.upd-stack .chip .src { color: var(--c-muted); font-weight: 500; margin-right: 6px; }
+.chip.upd-pending { color: var(--c-warning); background: var(--c-warning-bg); border-color: #FDE68A; }
+.chip.upd-clean   { color: var(--c-success); background: var(--c-success-bg); border-color: #A7F3D0; }
+.chip.upd-unknown { color: var(--c-muted);   background: var(--c-bg);         border-color: var(--c-border); }
+
+/* Modal */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(15,23,42,.55);
+  display: none;
+  align-items: center; justify-content: center;
+  padding: 24px;
+  animation: bdFade var(--d-med) var(--ease);
+}
+.modal-backdrop.is-open { display: flex; }
+@keyframes bdFade { from { opacity: 0; } to { opacity: 1; } }
+.modal {
+  background: var(--c-surface);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+  max-width: 900px; width: 100%; max-height: 86vh;
+  display: flex; flex-direction: column;
+  animation: mdSlide var(--d-med) var(--ease);
+}
+@keyframes mdSlide { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+.modal-hd {
+  padding: 18px 24px; border-bottom: 1px solid var(--c-border);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.modal-title { font-size: 16px; font-weight: 700; color: var(--c-primary); }
+.modal-sub { font-size: 12px; color: var(--c-muted); margin-top: 2px; font-family: ui-monospace, monospace; }
+.modal-bd { padding: 20px 24px; overflow-y: auto; }
+.modal-ft {
+  padding: 14px 24px; border-top: 1px solid var(--c-border);
+  display: flex; justify-content: flex-end; gap: 8px;
+}
+.icon-btn {
+  appearance: none; border: none; background: transparent;
+  width: 32px; height: 32px; border-radius: var(--r-sm); cursor: pointer;
+  color: var(--c-muted);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background var(--d-fast) var(--ease), color var(--d-fast) var(--ease);
+}
+.icon-btn:hover { background: #F1F5F9; color: var(--c-primary); }
+.icon-btn svg { width: 18px; height: 18px; }
+
+/* Sections within modal */
+.section + .section { margin-top: 20px; }
+.section-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.section-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--c-muted); }
+
+/* Bootstrap command block */
+.cmd-block {
+  background: var(--c-primary);
+  color: #E2E8F0;
+  border-radius: var(--r-lg);
+  padding: 18px 20px;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.6;
+  overflow-x: auto; white-space: pre;
+  position: relative;
+  border: 1px solid #1E293B;
+}
+.cmd-copy {
+  position: absolute; top: 12px; right: 12px;
+}
+
+/* Form */
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field + .field { margin-top: 14px; }
+.field label { font-size: 12px; font-weight: 600; color: var(--c-text-2); }
+.field .hint { font-size: 11px; color: var(--c-muted); }
+.field input, .field select, .field textarea {
+  font: inherit; font-size: 13px;
+  padding: 8px 12px; border: 1px solid var(--c-border-2);
+  border-radius: var(--r-md); background: var(--c-surface); color: var(--c-text);
+  transition: border-color var(--d-fast) var(--ease), box-shadow var(--d-fast) var(--ease);
+}
+.field input:focus, .field select:focus, .field textarea:focus {
+  border-color: var(--c-cta); box-shadow: 0 0 0 3px rgba(3,105,161,.15); outline: none;
+}
+
+/* Toast */
+.toast-stack {
+  position: fixed; z-index: 100;
+  bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 10px;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-left: 3px solid var(--c-cta);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  padding: 12px 16px; min-width: 260px; max-width: 380px;
+  font-size: 13px; color: var(--c-text);
+  display: flex; align-items: flex-start; gap: 10px;
+  animation: toastIn var(--d-med) var(--ease);
+}
+.toast.is-ok    { border-left-color: var(--c-success); }
+.toast.is-err   { border-left-color: var(--c-danger); }
+.toast.is-warn  { border-left-color: var(--c-warning); }
+.toast svg { width: 16px; height: 16px; margin-top: 1px; flex-shrink: 0; }
+.toast.is-ok svg   { color: var(--c-success); }
+.toast.is-err svg  { color: var(--c-danger); }
+.toast.is-warn svg { color: var(--c-warning); }
+@keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* Package list */
+.pkg-list { display: flex; flex-direction: column; gap: 8px; }
+.pkg {
+  display: grid; grid-template-columns: auto 1fr auto auto auto auto auto;
+  gap: 12px; align-items: center;
+  padding: 10px 14px; border: 1px solid var(--c-border); border-radius: var(--r-md);
+  background: var(--c-surface); font-size: 13px;
+  transition: background var(--d-fast) var(--ease), border-color var(--d-fast) var(--ease);
+}
+.pkg:hover { background: #F8FAFC; border-color: var(--c-border-2); }
+.pkg.is-checked { background: #EFF6FF; border-color: #BFDBFE; }
+.pkg.is-running { background: #EFF6FF; border-color: #BFDBFE; }
+.pkg.is-done    { background: var(--c-success-bg); border-color: #A7F3D0; }
+.pkg.is-failed  { background: var(--c-danger-bg); border-color: #FECACA; }
+.pkg-status { min-width: 78px; display: inline-flex; justify-content: flex-end; }
+.pkg-status .chip { display: inline-flex; }
+
+/* animated dot for in-progress status */
+.chip.info .dot, .chip .dot.is-spin {
+  animation: pulse 1.4s var(--ease) infinite;
+}
+.pkg-id { font-family: ui-monospace, monospace; font-size: 11px; color: var(--c-muted); margin-top: 2px; word-break: break-all; }
+.pkg-v { font-family: ui-monospace, monospace; font-size: 12px; color: var(--c-text-2); white-space: nowrap; }
+.pkg-arrow { color: var(--c-muted); font-family: ui-monospace, monospace; }
+.pkg-check { width: 16px; height: 16px; cursor: pointer; accent-color: var(--c-cta); margin: 0; }
+
+/* Bulk-select action bar inside the modal */
+.bulk-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 10px 14px;
+  border: 1px solid #BFDBFE; background: #EFF6FF;
+  border-radius: var(--r-md); margin-bottom: 10px;
+  font-size: 13px; color: var(--c-info);
+}
+.bulk-bar.is-hidden { display: none; }
+.bulk-left { display: inline-flex; align-items: center; gap: 10px; color: var(--c-text-2); font-weight: 500; }
+.bulk-left label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.bulk-left input[type=checkbox] { accent-color: var(--c-cta); width: 16px; height: 16px; cursor: pointer; }
+.bulk-count { font-weight: 600; color: var(--c-info); }
+
+/* CTA-outline button: strong border + CTA color, clearly visible on any surface */
+.btn-cta-outline {
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-cta);
+  color: var(--c-cta);
+  font-weight: 600;
+}
+.btn-cta-outline:hover {
+  background: var(--c-cta);
+  border-color: var(--c-cta);
+  color: #fff;
+}
+
+/* WebSocket live-status indicator */
+.ws-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--c-muted); user-select: none;
+  padding: 3px 10px; border: 1px solid var(--c-border);
+  border-radius: 999px; background: var(--c-bg);
+}
+.ws-status .ws-dot {
+  width: 7px; height: 7px; border-radius: 999px; background: #CBD5E1;
+  transition: background var(--d-med) var(--ease);
+}
+.ws-status.is-live { color: var(--c-success); border-color: #A7F3D0; background: var(--c-success-bg); }
+.ws-status.is-live .ws-dot { background: var(--c-success); animation: pulse 2s var(--ease) infinite; }
+.ws-status.is-down { color: var(--c-warning); border-color: #FDE68A; background: var(--c-warning-bg); }
+.ws-status.is-down .ws-dot { background: var(--c-warning); }
+.tbl tbody tr.is-flash { animation: rowFlash 1200ms var(--ease); }
+@keyframes rowFlash { 0% { background: #DBEAFE; } 100% { background: transparent; } }
+
+/* --- user menu in topbar ------------------------------------------------ */
+.user-menu { position: relative; }
+.user-btn {
+  appearance: none; background: var(--c-bg); border: 1px solid var(--c-border);
+  border-radius: 999px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 4px 10px 4px 4px; font: inherit;
+  transition: border-color var(--d-fast) var(--ease), background var(--d-fast) var(--ease);
+}
+.user-btn:hover { border-color: var(--c-muted); background: var(--c-surface); }
+.user-avatar {
+  width: 28px; height: 28px; border-radius: 999px;
+  background: linear-gradient(135deg, var(--c-cta), var(--c-primary));
+  color: #fff; font-weight: 700; font-size: 12px; text-transform: uppercase;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.user-meta { display: inline-flex; flex-direction: column; line-height: 1.15; text-align: left; }
+.user-name { font-size: 12px; font-weight: 600; color: var(--c-primary); }
+.user-role { font-size: 10px; color: var(--c-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+.user-pop {
+  position: absolute; right: 0; top: calc(100% + 6px); min-width: 180px;
+  background: var(--c-surface); border: 1px solid var(--c-border);
+  border-radius: var(--r-md); box-shadow: var(--shadow-lg);
+  padding: 6px; display: none; z-index: 60;
+}
+.user-pop.is-open { display: block; animation: bdFade var(--d-fast) var(--ease); }
+.user-item {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  width: 100%; padding: 8px 10px; border-radius: var(--r-sm);
+  display: inline-flex; align-items: center; gap: 10px;
+  color: var(--c-text); font: inherit; font-size: 13px;
+  transition: background var(--d-fast) var(--ease);
+}
+.user-item:hover { background: #F1F5F9; }
+.user-item svg { width: 16px; height: 16px; color: var(--c-muted); }
+
+/* --- small helpers for role badges ------------------------------------- */
+.chip.role-admin    { color: #6D28D9; background: #F5F3FF; border-color: #DDD6FE; }
+.chip.role-operator { color: var(--c-cta); background: var(--c-info-bg); border-color: #BFDBFE; }
+.chip.role-viewer   { color: var(--c-muted); background: var(--c-bg); border-color: var(--c-border); }
+
+/* Admin-only elements stay hidden for everyone *except* admins. For admins
+   the element falls back to its own CSS (modal stays hidden until .is-open,
+   tab-panel stays hidden until .is-active, tab button shows inline-flex). */
+body:not(.is-admin) [data-admin-only] { display: none !important; }
+
+/* TOTP setup block */
+.totp-box {
+  background: var(--c-bg); border: 1px solid var(--c-border);
+  border-radius: var(--r-md); padding: 14px 16px; font-size: 13px;
+}
+.totp-secret {
+  font-family: ui-monospace, monospace; font-size: 16px; font-weight: 600;
+  letter-spacing: .04em; color: var(--c-primary);
+  padding: 8px 12px; background: var(--c-surface); border: 1px dashed var(--c-border-2);
+  border-radius: var(--r-sm); display: inline-block; margin: 6px 0;
+}
+.stale-dot { display:inline-block;width:6px;height:6px;border-radius:999px;background:var(--c-danger);margin-right:6px;vertical-align:middle }
+
+/* Online/offline pill next to the hostname */
+.chip.online  { color: var(--c-success); background: var(--c-success-bg); border-color: #A7F3D0; }
+.chip.offline { color: var(--c-muted);   background: var(--c-bg);         border-color: var(--c-border); }
+.chip.online .dot  { background: var(--c-success); animation: pulse 2s var(--ease) infinite; }
+.chip.offline .dot { background: var(--c-muted); }
+
+/* Live log console in the device modal */
+.log-console {
+  background: var(--c-primary);
+  color: #E2E8F0;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 11.5px; line-height: 1.55;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  max-height: 280px; overflow-y: auto;
+  border: 1px solid #1E293B;
+  white-space: pre-wrap; word-break: break-all;
+}
+.log-console:empty::before { content: 'Waiting for live output…'; color: #64748B; font-style: italic; }
+.log-line { display: block; padding: 1px 0; }
+.log-line .log-ts { color: #94A3B8; margin-right: 8px; }
+.log-empty { color: #64748B; font-style: italic; }
+
+/* Persistent live-log pane pinned inside the modal, below the scrollable body
+   and above the footer. Survives renderDeviceModal() re-renders triggered by
+   'pc' WebSocket events, so user sees an uninterrupted stream. */
+.modal .modal-bd { flex: 1 1 auto; }
+.modal-log {
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 24px 14px;
+  background: var(--c-bg);
+  border-top: 1px solid var(--c-border);
+  max-height: 260px;
+  transition: box-shadow 350ms var(--ease);
+}
+.modal-log-hd {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px;
+}
+.modal-log .section-title {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--c-muted);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.modal-log .section-title .live-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 999px;
+  background: var(--c-border-2);
+}
+.modal-log.is-live .section-title .live-dot {
+  background: var(--c-success); animation: pulse 2s var(--ease) infinite;
+}
+.modal-log .log-console { flex: 1 1 auto; max-height: 200px; }
+.modal-log.is-pulse {
+  box-shadow: inset 0 0 0 2px var(--c-cta);
+}
+
+/* ----- Sub-tabs inside the device modal -------------------------------- */
+.modal-tabs {
+  display: flex; gap: 2px; border-bottom: 1px solid var(--c-border);
+  margin: 4px 0 16px;
+  padding: 0;
+}
+.modal-tab {
+  appearance: none; background: none; border: none;
+  padding: 9px 14px 10px; font: inherit; font-weight: 500; font-size: 13px;
+  color: var(--c-text-2); cursor: pointer;
+  border-bottom: 2px solid transparent;
+  display: inline-flex; align-items: center; gap: 8px;
+  transition: color var(--d-fast) var(--ease), border-color var(--d-fast) var(--ease);
+}
+.modal-tab:hover { color: var(--c-primary); }
+.modal-tab.is-active { color: var(--c-primary); border-bottom-color: var(--c-cta); font-weight: 600; }
+.modal-tab .chip { padding: 1px 8px; font-size: 10.5px; }
+.modal-panel { display: none; }
+.modal-panel.is-active { display: block; }
+
+/* Windows update row layout (simpler than winget — no version columns) */
+.wu-list { display: flex; flex-direction: column; gap: 8px; }
+.wu {
+  display: grid; grid-template-columns: auto 1fr auto auto;
+  gap: 12px; align-items: center;
+  padding: 10px 14px; border: 1px solid var(--c-border); border-radius: var(--r-md);
+  background: var(--c-surface); font-size: 13px;
+  transition: background var(--d-fast) var(--ease), border-color var(--d-fast) var(--ease);
+}
+.wu:hover { background: #F8FAFC; border-color: var(--c-border-2); }
+.wu.is-running { background: #EFF6FF; border-color: #BFDBFE; }
+.wu-title { font-weight: 600; color: var(--c-primary); }
+.wu-meta { font-size: 11px; color: var(--c-muted); margin-top: 2px; }
+.wu-severity { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+.wu-severity.critical  { color: var(--c-danger); }
+.wu-severity.important { color: var(--c-warning); }
+.wu-severity.moderate, .wu-severity.low { color: var(--c-muted); }
+.wu-kb {
+  font-family: ui-monospace, monospace; font-size: 11px;
+  color: var(--c-text-2); background: var(--c-bg);
+  padding: 1px 6px; border-radius: 4px; border: 1px solid var(--c-border);
+}
+
+/* Key-value list */
+.kv { display: grid; grid-template-columns: 140px 1fr; gap: 6px 16px; font-size: 13px; }
+.kv dt { color: var(--c-muted); font-weight: 500; }
+.kv dd { color: var(--c-text); font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; }
+
+/* Empty state */
+.empty {
+  text-align: center; padding: 56px 24px; color: var(--c-muted);
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+}
+.empty svg { width: 36px; height: 36px; opacity: .5; }
+.empty .empty-title { font-weight: 600; color: var(--c-primary); font-size: 14px; }
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .wrap { padding: 20px 14px 60px; }
+  .topbar-inner { padding: 12px 14px; }
+  .stats { grid-template-columns: 1fr; }
+  .tbl th, .tbl td { padding: 10px 12px; }
+  .modal { max-height: 94vh; }
+}
+
+/* Banner */
+.banner {
+  padding: 14px 18px; border-radius: var(--r-md);
+  font-size: 13px; margin-bottom: 18px;
+  border: 1px solid var(--c-border);
+  display: flex; align-items: flex-start; gap: 12px;
+}
+.banner.is-err { background: var(--c-danger-bg); border-color: #FECACA; color: var(--c-danger); }
+.banner.is-info { background: var(--c-info-bg); border-color: #BFDBFE; color: var(--c-info); }
+.banner svg { width: 18px; height: 18px; margin-top: 1px; flex-shrink: 0; }
+
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+      </span>
+      <div>
+        <div class="brand-name">Corrivex</div>
+      </div>
+      <span class="brand-tag">Enterprise</span>
+    </div>
+    <div class="topbar-right">
+      <span class="ws-status is-down" id="ws-status" title="Live updates">
+        <span class="ws-dot"></span><span class="ws-label">connecting…</span>
+      </span>
+      <span class="badge-secure" title="Authenticated session">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Secure session
+      </span>
+      <div class="user-menu">
+        <button class="user-btn" id="user-btn" aria-haspopup="true" aria-expanded="false">
+          <span class="user-avatar">{{printf "%.1s" .CurrentUser.username}}</span>
+          <span class="user-meta"><span class="user-name">{{.CurrentUser.username}}</span><span class="user-role">{{.CurrentUser.role}}</span></span>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;color:var(--c-muted)"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="user-pop" id="user-pop" role="menu">
+          <button class="user-item" id="open-profile">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            Profile &amp; 2FA
+          </button>
+          <button class="user-item" id="logout-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+            Sign out
+          </button>
+        </div>
+      </div>
+      <span class="mono" style="font-size:12px;color:var(--c-muted)" title="Corrivex application version">v{{.AppVersion}}</span>
+      <span class="mono" style="font-size:11px;color:var(--c-muted);opacity:.7" title="Database schema migration version">schema v{{.SchemaVersion}}</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  {{if .MigrationError}}
+  <div class="banner is-err" role="alert">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+    <div><strong>Database migration failed.</strong><div class="mono" style="margin-top:4px;font-size:12px">{{.MigrationError}}</div></div>
+  </div>
+  {{end}}
+
+  <!-- Stats -->
+  <section class="stats">
+    <div class="stat is-total">
+      <div class="stat-label"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>Managed devices</div>
+      <div class="stat-value">{{.Stats.Total}}</div>
+      <div class="stat-hint">All hosts that have reported</div>
+    </div>
+    <div class="stat is-updates">
+      <div class="stat-label"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>Pending updates<span class="pulse"></span></div>
+      <div class="stat-value">{{.Stats.WithUpdates}}</div>
+      <div class="stat-hint">Devices awaiting patch delivery</div>
+    </div>
+    <div class="stat is-ok">
+      <div class="stat-label"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>Fully patched</div>
+      <div class="stat-value">{{.Stats.UpToDate}}</div>
+      <div class="stat-hint">No outstanding upgrades</div>
+    </div>
+    <div class="stat is-new">
+      <div class="stat-label"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Awaiting first scan</div>
+      <div class="stat-value">{{.Stats.NeverSeen}}</div>
+      <div class="stat-hint">Enrolled, no full report yet</div>
+    </div>
+  </section>
+
+  <!-- Tabs -->
+  <nav class="tabs" role="tablist" aria-label="Dashboard sections">
+    <button class="tab is-active" data-tab="devices" role="tab" aria-selected="true">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+      Devices
+    </button>
+    <button class="tab" data-tab="domains" role="tab" aria-selected="false">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/><path d="M2 12h20"/></svg>
+      Allowed domains
+    </button>
+    <button class="tab" data-tab="settings" role="tab" aria-selected="false">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      Settings
+    </button>
+    <button class="tab" data-tab="enroll" role="tab" aria-selected="false">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+      Enroll device
+    </button>
+    <button class="tab" data-tab="users" role="tab" aria-selected="false" data-admin-only>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      Users
+    </button>
+  </nav>
+
+  <!-- Devices panel -->
+  <section class="tab-panel is-active" id="panel-devices" role="tabpanel">
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <input type="search" class="input" id="device-search" placeholder="Search hostname, domain, OS" aria-label="Search devices">
+        <select class="input" id="domain-filter" aria-label="Filter by domain" style="min-width:180px">
+          <option value="">All domains</option>
+          {{range .Domains}}<option value="{{.Domain}}">{{.Domain}}</option>{{end}}
+        </select>
+        <select class="input" id="state-filter" aria-label="Filter by state" style="min-width:170px">
+          <option value="">All states</option>
+          <option value="online">Online (&lt; 24h)</option>
+          <option value="stale">Stale (&gt; 3d)</option>
+          <option value="never">Never seen</option>
+        </select>
+      </div>
+      <div class="toolbar-right">
+        <button class="btn" onclick="location.reload()">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+          Refresh
+        </button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="tbl-wrap">
+        <table class="tbl" id="device-table">
+          <thead>
+            <tr>
+              <th>Host</th>
+              <th>Domain</th>
+              <th>OS</th>
+              <th>Last seen</th>
+              <th>Updates</th>
+              <th>Status</th>
+              <th style="text-align:right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{if .PCs}}
+            {{range .PCs}}
+            <tr class="is-clickable" data-host="{{.Hostname}}" data-search="{{.Hostname}} {{if .Domain}}{{.Domain}}{{end}} {{if .OSVersion}}{{.OSVersion}}{{end}}" data-domain="{{if .Domain}}{{.Domain}}{{end}}" data-online="{{if .Online}}1{{else}}0{{end}}">
+              <td>
+                <div style="display:flex;align-items:center;gap:8px"><span class="hostname">{{.Hostname}}</span>{{if .Online}}<span class="chip online" data-host-online><span class="dot"></span>online</span>{{else}}<span class="chip offline" data-host-online><span class="dot"></span>offline</span>{{end}}</div>
+                {{if .CheckUser}}<div class="sub">{{.CheckUser}}</div>{{end}}
+              </td>
+              <td>{{if .Domain}}<span class="chip muted">{{.Domain}}</span>{{else}}<span class="chip muted">—</span>{{end}}</td>
+              <td class="sub os-cell">{{if .OSVersion}}{{.OSVersion}}{{else}}—{{end}}</td>
+              <td class="sub" data-since="{{if .LastSeen}}{{.LastSeen.Format "2006-01-02T15:04:05Z07:00"}}{{end}}">{{if .LastSeen}}{{.LastSeen.Format "2006-01-02 15:04"}}{{else}}Never{{end}}</td>
+              <td>
+                <div class="upd-stack">
+                  {{$wc := .UpdateCount}}
+                  {{if lt $wc 0}}<span class="chip upd-unknown" title="No winget scan yet"><span class="src">winget</span>?</span>
+                  {{else if eq $wc 0}}<span class="chip upd-clean" title="No winget upgrades available"><span class="src">winget</span>0</span>
+                  {{else}}<span class="chip upd-pending" title="Winget upgrades available"><span class="src">winget</span>{{$wc}}</span>{{end}}
+                  {{$uc := .WindowsUpdateCount}}
+                  {{if lt $uc 0}}<span class="chip upd-unknown" title="No Windows Update scan yet"><span class="src">WU</span>?</span>
+                  {{else if eq $uc 0}}<span class="chip upd-clean" title="Windows is up to date"><span class="src">WU</span>0</span>
+                  {{else}}<span class="chip upd-pending" title="Windows updates pending"><span class="src">WU</span>{{$uc}}</span>{{end}}
+                </div>
+              </td>
+              <td>{{template "statusChip" .}}</td>
+              <td>
+                <div class="row-actions">
+                  <button class="btn btn-sm" data-action="view" data-host="{{.Hostname}}" title="Open details">Details</button>
+                  <button class="btn btn-sm btn-primary" data-action="upgrade-all" data-host="{{.Hostname}}" title="Queue upgrade-all">Upgrade all</button>
+                </div>
+              </td>
+            </tr>
+            {{end}}
+            {{else}}
+            <tr><td colspan="7">
+              <div class="empty">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+                <div class="empty-title">No devices enrolled yet</div>
+                <div>Use the <strong>Enroll device</strong> tab to get the bootstrap command.</div>
+              </div>
+            </td></tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Domains panel -->
+  <section class="tab-panel" id="panel-domains" role="tabpanel">
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <h2 class="h2">Allowed domains</h2>
+      </div>
+      <div class="toolbar-right">
+        <input type="text" class="input" id="new-domain" placeholder="contoso.local" aria-label="New domain">
+        <input type="text" class="input" id="new-domain-notes" placeholder="Notes (optional)" aria-label="Notes" style="min-width:200px">
+        <button class="btn btn-primary" id="add-domain-btn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          Add domain
+        </button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="tbl-wrap">
+        <table class="tbl" id="domains-table">
+          <thead><tr><th>Domain</th><th>Notes</th><th>Added</th><th style="text-align:right">Action</th></tr></thead>
+          <tbody>
+          {{range .Domains}}
+            <tr data-domain-id="{{.ID}}">
+              <td><strong>{{.Domain}}</strong></td>
+              <td class="sub">{{if .Notes}}{{.Notes}}{{else}}—{{end}}</td>
+              <td class="sub">{{.CreatedAt.Format "2006-01-02"}}</td>
+              <td style="text-align:right">
+                <button class="btn btn-sm btn-danger" data-action="remove-domain" data-id="{{.ID}}">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                  Remove
+                </button>
+              </td>
+            </tr>
+          {{else}}
+            <tr><td colspan="4"><div class="empty"><div class="empty-title">No allowed domains configured</div><div>Add your AD domain to enroll devices.</div></div></td></tr>
+          {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Settings panel -->
+  <section class="tab-panel" id="panel-settings" role="tabpanel">
+    <div class="card" style="max-width:720px">
+      <div class="card-hd">
+        <div>
+          <h2 class="h2">Agent policy</h2>
+          <div class="sub" style="color:var(--c-muted);font-size:12px;margin-top:4px">Controls how often devices poll the server and run full scans.</div>
+        </div>
+      </div>
+      <div class="card-bd">
+        <div class="field">
+          <label for="s-check">Task poll interval (minutes)</label>
+          <input type="number" min="1" id="s-check" value="{{.Settings.check_interval_minutes}}">
+          <div class="hint">How often the service checks in for pending tasks.</div>
+        </div>
+        <div class="field">
+          <label for="s-scan">Full scan interval (hours)</label>
+          <input type="number" min="1" id="s-scan" value="{{.Settings.full_scan_interval_hours}}">
+          <div class="hint">How often the service performs a full inventory and upgrade-check.</div>
+        </div>
+        <div class="field">
+          <label for="s-svc">Windows service name</label>
+          <input type="text" id="s-svc" value="{{.Settings.service_name}}">
+          <div class="hint">Shown in services.msc on managed devices.</div>
+        </div>
+        <div style="margin-top:18px;display:flex;justify-content:flex-end">
+          <button class="btn btn-primary" id="save-settings-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Save changes
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Users panel (admin only) -->
+  <section class="tab-panel" id="panel-users" role="tabpanel" data-admin-only>
+    <div class="toolbar">
+      <div class="toolbar-left"><h2 class="h2">Users &amp; roles</h2></div>
+      <div class="toolbar-right">
+        <button class="btn btn-primary" id="new-user-btn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          Add user
+        </button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="tbl-wrap">
+        <table class="tbl" id="users-table">
+          <thead><tr><th>Username</th><th>Role</th><th>2FA</th><th>Last login</th><th>Created</th><th style="text-align:right">Actions</th></tr></thead>
+          <tbody><tr><td colspan="6"><div class="empty"><div class="empty-title">Loading users…</div></div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Enroll panel -->
+  <section class="tab-panel" id="panel-enroll" role="tabpanel">
+    <div class="card">
+      <div class="card-hd">
+        <div>
+          <h2 class="h2">Enroll a Windows device</h2>
+          <div class="sub" style="color:var(--c-muted);font-size:12px;margin-top:4px">Run this command as an administrator on any Windows endpoint whose domain is in the allow list.</div>
+        </div>
+      </div>
+      <div class="card-bd">
+        <div class="cmd-block" id="bootstrap-cmd">{{.BootstrapCmd}}</div>
+        <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+          <button class="btn btn-dark" id="copy-bootstrap-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+            Copy command
+          </button>
+          <span class="chip ok" style="gap:6px"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Domain allow-listed</span>
+          <span class="chip info"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>Signed binary from {{.APIUrl}}</span>
+        </div>
+
+        <div class="section" style="margin-top:24px">
+          <div class="section-hd"><div class="section-title">What this command does</div></div>
+          <ul style="list-style:none;padding:0;display:grid;gap:8px">
+            <li style="display:flex;gap:10px;align-items:flex-start"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="var(--c-cta)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;flex-shrink:0;margin-top:2px"><polyline points="20 6 9 17 4 12"/></svg>Downloads <span class="mono">corrivex-agent.exe</span> to <span class="mono">C:\ProgramData\Corrivex</span>.</li>
+            <li style="display:flex;gap:10px;align-items:flex-start"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="var(--c-cta)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;flex-shrink:0;margin-top:2px"><polyline points="20 6 9 17 4 12"/></svg>Registers a Windows Service running as LocalSystem.</li>
+            <li style="display:flex;gap:10px;align-items:flex-start"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="var(--c-cta)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;flex-shrink:0;margin-top:2px"><polyline points="20 6 9 17 4 12"/></svg>Polls this server every <strong>{{.Settings.check_interval_minutes}} min</strong> and performs a full winget scan every <strong>{{.Settings.full_scan_interval_hours}} h</strong>.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- Device detail modal -->
+<div class="modal-backdrop" id="device-modal" role="dialog" aria-modal="true" aria-labelledby="device-modal-title">
+  <div class="modal">
+    <div class="modal-hd">
+      <div>
+        <div class="modal-title" id="device-modal-title">—</div>
+        <div class="modal-sub" id="device-modal-sub"></div>
+      </div>
+      <button class="icon-btn" data-close title="Close">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-bd" id="device-modal-body">Loading…</div>
+    <div class="modal-log" id="modal-log-wrap">
+      <div class="modal-log-hd">
+        <span class="section-title"><span class="live-dot"></span>Live output</span>
+        <div style="display:inline-flex;gap:6px">
+          <button class="btn btn-sm btn-ghost" id="log-clear-btn" title="Clear the log pane">Clear</button>
+        </div>
+      </div>
+      <div class="log-console" id="live-log" data-host=""></div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn btn-danger" id="remove-device-btn" data-host="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        Uninstall &amp; remove
+      </button>
+      <button class="btn btn-danger" id="force-remove-btn" data-host="" title="Delete this device server-side without waiting for the agent — use when the host is offline.">
+        Force remove
+      </button>
+      <span style="flex:1"></span>
+      <button class="btn" data-close>Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Profile / 2FA modal -->
+<div class="modal-backdrop" id="profile-modal" role="dialog" aria-modal="true">
+  <div class="modal" style="max-width:600px">
+    <div class="modal-hd">
+      <div><div class="modal-title">Profile</div>
+        <div class="modal-sub" id="profile-sub"></div></div>
+      <button class="icon-btn" data-close><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg></button>
+    </div>
+    <div class="modal-bd">
+      <section class="section">
+        <div class="section-hd"><div class="section-title">Two-factor authentication</div></div>
+        <div id="totp-state"></div>
+      </section>
+      <section class="section">
+        <div class="section-hd"><div class="section-title">Change password</div></div>
+        <div class="field"><label>Current password</label><input type="password" id="pw-current"></div>
+        <div class="field"><label>New password</label><input type="password" id="pw-new" minlength="8"></div>
+        <div style="margin-top:10px;display:flex;justify-content:flex-end">
+          <button class="btn btn-primary" id="pw-save-btn">Update password</button>
+        </div>
+      </section>
+    </div>
+    <div class="modal-ft"><button class="btn" data-close>Close</button></div>
+  </div>
+</div>
+
+<!-- Add/edit user modal (admin) -->
+<div class="modal-backdrop" id="user-modal" role="dialog" aria-modal="true" data-admin-only>
+  <div class="modal" style="max-width:480px">
+    <div class="modal-hd">
+      <div class="modal-title" id="user-modal-title">Add user</div>
+      <button class="icon-btn" data-close><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg></button>
+    </div>
+    <div class="modal-bd">
+      <input type="hidden" id="user-edit-id">
+      <div class="field" id="user-username-field"><label>Username</label><input type="text" id="user-username"></div>
+      <div class="field"><label id="user-password-label">Password</label><input type="password" id="user-password" minlength="8"><div class="hint" id="user-password-hint">Minimum 8 characters.</div></div>
+      <div class="field"><label>Role</label>
+        <select class="input" id="user-role">
+          <option value="viewer">viewer — read-only</option>
+          <option value="operator">operator — manage devices &amp; tasks</option>
+          <option value="admin">admin — full access</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="user-save-btn">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-stack" id="toast-stack" aria-live="polite" aria-atomic="true"></div>
+
+<script>
+const API = "{{.APIUrl}}";
+const CURRENT_USER = { username: "{{.CurrentUser.username}}", role: "{{.CurrentUser.role}}", totp_enabled: {{if .CurrentUser.totp_enabled}}true{{else}}false{{end}} };
+if (CURRENT_USER.role === 'admin') document.body.classList.add('is-admin');
+
+// ---- Tabs -----------------------------------------------------------------
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => { x.classList.remove('is-active'); x.setAttribute('aria-selected','false'); });
+    document.querySelectorAll('.tab-panel').forEach(x => x.classList.remove('is-active'));
+    t.classList.add('is-active'); t.setAttribute('aria-selected','true');
+    document.getElementById('panel-' + t.dataset.tab).classList.add('is-active');
+  });
+});
+
+// ---- Search / filter ------------------------------------------------------
+const searchInput = document.getElementById('device-search');
+const domainFilter = document.getElementById('domain-filter');
+const stateFilter = document.getElementById('state-filter');
+function applyFilter() {
+  const q = (searchInput.value || '').toLowerCase();
+  const d = (domainFilter.value || '').toLowerCase();
+  const st = (stateFilter?.value || '');
+  const now = Date.now();
+  document.querySelectorAll('#device-table tbody tr[data-host]').forEach(tr => {
+    const s = (tr.dataset.search || '').toLowerCase();
+    const dd = (tr.dataset.domain || '').toLowerCase();
+    const lastIso = tr.querySelector('td[data-since]')?.dataset?.since || '';
+    const ageH = lastIso ? ((now - new Date(lastIso).getTime())/3600e3) : Infinity;
+    const okQ = !q || s.includes(q);
+    const okD = !d || dd === d;
+    let okS = true;
+    if (st === 'online') okS = ageH <= 24;
+    else if (st === 'stale') okS = ageH > 72;
+    else if (st === 'never') okS = !lastIso;
+    tr.style.display = okQ && okD && okS ? '' : 'none';
+  });
+}
+searchInput?.addEventListener('input', applyFilter);
+domainFilter?.addEventListener('change', applyFilter);
+stateFilter?.addEventListener('change', applyFilter);
+
+// ---- Toasts --------------------------------------------------------------
+const toastStack = document.getElementById('toast-stack');
+const ICON_OK   = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const ICON_ERR  = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>';
+const ICON_WARN = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>';
+function toast(msg, kind = 'ok') {
+  const el = document.createElement('div');
+  el.className = 'toast is-' + kind;
+  el.innerHTML = (kind === 'err' ? ICON_ERR : kind === 'warn' ? ICON_WARN : ICON_OK) + '<div>' + escapeHTML(msg) + '</div>';
+  toastStack.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateY(4px)'; }, 3200);
+  setTimeout(() => el.remove(), 3600);
+}
+function escapeHTML(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// ---- Modal ----------------------------------------------------------------
+const modal = document.getElementById('device-modal');
+function openModal() { modal.classList.add('is-open'); document.body.style.overflow = 'hidden'; }
+function closeModal() {
+  modal.classList.remove('is-open');
+  document.body.style.overflow = '';
+  // Clear the live log pane when the modal closes so the next open starts fresh.
+  const log = document.getElementById('live-log');
+  if (log) { log.innerHTML = ''; log.dataset.host = ''; }
+  const wrap = document.getElementById('modal-log-wrap');
+  if (wrap) wrap.classList.remove('is-live', 'is-pulse');
+}
+
+// Scroll the live-output pane into view and briefly highlight it so the user
+// notices where live progress for a just-queued task will show up.
+function popLogPane() {
+  const wrap = document.getElementById('modal-log-wrap');
+  const log = document.getElementById('live-log');
+  if (!wrap || !log) return;
+  wrap.classList.add('is-live');
+  wrap.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  wrap.classList.remove('is-pulse');
+  // re-trigger CSS transition/shadow
+  void wrap.offsetWidth;
+  wrap.classList.add('is-pulse');
+  setTimeout(() => wrap.classList.remove('is-pulse'), 1200);
+  log.scrollTop = log.scrollHeight;
+}
+modal.addEventListener('click', e => { if (e.target === modal || e.target.closest('[data-close]')) closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+async function viewDevice(host) {
+  document.getElementById('device-modal-title').textContent = host;
+  document.getElementById('device-modal-sub').textContent = 'Loading…';
+  document.getElementById('device-modal-body').textContent = 'Loading…';
+  const rmBtn = document.getElementById('remove-device-btn');
+  if (rmBtn) rmBtn.dataset.host = host;
+  // Swap the persistent log pane to this host. If we're switching to a new
+  // host, clear accumulated lines; if it's the same host (re-open), keep them.
+  const log = document.getElementById('live-log');
+  if (log && log.dataset.host !== host) {
+    log.innerHTML = '';
+    log.dataset.host = host;
+  }
+  openModal();
+  try {
+    const res = await fetch(API + '?host=' + encodeURIComponent(host));
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const pc = await res.json();
+    renderDeviceModal(pc);
+  } catch (e) {
+    document.getElementById('device-modal-body').innerHTML = '<div class="banner is-err">Could not load device: ' + escapeHTML(e.message) + '</div>';
+  }
+}
+
+function renderDeviceModal(pc) {
+  const pkgs = safeParse(pc.last_packages) || [];
+  const wu   = safeParse(pc.windows_updates) || [];
+  const users = safeParse(pc.users) || [];
+  const admins = safeParse(pc.local_admins) || [];
+  document.getElementById('device-modal-sub').textContent =
+    [pc.domain || '—', pc.os_version || '—', pc.last_seen ? ('seen ' + fmtAgo(pc.last_seen)) : 'never seen'].join('  ·  ');
+
+  // Remember which sub-tab was active before this re-render so we don't
+  // bounce back to "Overview" every time a 'pc' event arrives.
+  const prevTab = document.querySelector('.modal-tab.is-active')?.dataset.modalTab || 'overview';
+
+  let html = '';
+  html += '<nav class="modal-tabs" role="tablist">';
+  html += '<button class="modal-tab' + (prevTab==='overview'?' is-active':'') + '" data-modal-tab="overview">Overview</button>';
+  html += '<button class="modal-tab' + (prevTab==='winget'?' is-active':'') + '" data-modal-tab="winget">Winget <span class="chip muted">' + pkgs.length + '</span></button>';
+  html += '<button class="modal-tab' + (prevTab==='wu'?' is-active':'') + '" data-modal-tab="wu">Windows update <span class="chip muted">' + wu.length + '</span></button>';
+  html += '</nav>';
+
+  html += '<div class="modal-panel' + (prevTab==='overview'?' is-active':'') + '" data-modal-panel="overview">';
+  html += '<section class="section">';
+  html += '<div class="section-hd"><div class="section-title">Overview</div></div>';
+  html += '<dl class="kv">';
+  html += '<dt>Hostname</dt><dd>' + escapeHTML(pc.hostname) + '</dd>';
+  html += '<dt>Domain</dt><dd>' + escapeHTML(pc.domain || '—') + '</dd>';
+  html += '<dt>OS</dt><dd>' + escapeHTML(pc.os_version || '—') + '</dd>';
+  html += '<dt>Last seen</dt><dd>' + (pc.last_seen ? (new Date(pc.last_seen).toLocaleString() + ' (' + fmtAgo(pc.last_seen) + ')') : '—') + '</dd>';
+  html += '<dt>Last full scan</dt><dd>' + (pc.last_full_report ? (new Date(pc.last_full_report).toLocaleString() + ' (' + fmtAgo(pc.last_full_report) + ')') : '—') + '</dd>';
+  html += '<dt>Updates</dt><dd>' + (pc.update_count < 0 ? 'unknown' : pc.update_count) + '</dd>';
+  html += '</dl>';
+  html += '</section>';
+
+  // End of Overview panel — open Winget panel.
+  html += '</div>'; // /overview
+  html += '<div class="modal-panel' + (prevTab==="winget"?' is-active':'') + '" data-modal-panel="winget">';
+
+  // Build a map of live task state per package from pc.tasks. Only consider
+  // in-flight tasks (pending/delivered) so that completed tasks from an old
+  // winget upgrade don't disable a package row in a newer scan.
+  const pkgLiveStatus = {};
+  let allUpgradeState = null; // 'pending' | 'delivered' — or null
+  let wuAllState = null;
+  const wuLiveStatus = {};
+  for (const t of (pc.tasks || [])) {
+    if (t.status !== 'pending' && t.status !== 'delivered') continue;
+    if (t.type === 'upgrade_all') {
+      allUpgradeState = t.status;
+    } else if (t.type === 'windows_update_all') {
+      wuAllState = t.status;
+    } else if (t.type === 'windows_update_single' && t.package_id) {
+      wuLiveStatus[t.package_id] = { status: t.status };
+    } else if (t.package_id) {
+      pkgLiveStatus[t.package_id] = { status: t.status, task_id: t.id, type: t.type };
+    }
+  }
+
+  html += '<section class="section" data-pkg-section>';
+  html += '<div class="section-hd"><div class="section-title">Pending updates (' + pkgs.length + ')</div>';
+  if (pkgs.length > 0) {
+    const allDisabled = !!allUpgradeState;
+    const allLabel = allUpgradeState === 'pending' ? 'Upgrading all…' : allUpgradeState === 'delivered' ? 'Running…' : 'Upgrade all';
+    html += '<button class="btn btn-sm btn-primary" id="upgrade-all-btn" data-action="upgrade-all" data-host="' + escapeHTML(pc.hostname) + '"' + (allDisabled ? ' disabled' : '') + '>' + escapeHTML(allLabel) + '</button>';
+  }
+  html += '</div>';
+  if (pkgs.length === 0) {
+    html += '<div class="card-empty">No pending updates.</div>';
+  } else {
+    html += '<div class="bulk-bar is-hidden" id="bulk-bar">';
+    html += '<div class="bulk-left">';
+    html += '<label><input type="checkbox" id="select-all"> Select all</label>';
+    html += '<span id="bulk-count-text"><span class="bulk-count">0</span> selected</span>';
+    html += '</div>';
+    html += '<div style="display:inline-flex;gap:6px">';
+    html += '<button class="btn btn-sm btn-ghost" id="deselect-all">Deselect all</button>';
+    html += '<button class="btn btn-sm btn-primary" id="bulk-upgrade" data-host="' + escapeHTML(pc.hostname) + '">Upgrade selected</button>';
+    html += '</div>';
+    html += '</div>';
+    html += '<div class="pkg-list">';
+    for (const p of pkgs) {
+      const pid = p.id || '';
+      const pname = p.name || '';
+      const effectiveStatus = allUpgradeState || pkgLiveStatus[pid]?.status || '';
+      const rowCls = effectiveStatus === 'delivered' || effectiveStatus === 'pending' ? ' is-running' : '';
+      const disabled = effectiveStatus === 'pending' || effectiveStatus === 'delivered';
+      html += '<label class="pkg' + rowCls + '" data-pkg-row="' + escapeHTML(pid) + '">';
+      html += '<input type="checkbox" class="pkg-check" data-id="' + escapeHTML(pid) + '" data-name="' + escapeHTML(pname) + '"' + (disabled ? ' disabled' : '') + '>';
+      html += '<div><strong>' + escapeHTML(pname || pid || '?') + '</strong><div class="pkg-id">' + escapeHTML(pid) + '</div></div>';
+      html += '<span class="pkg-v">' + escapeHTML(p.version || '?') + '</span>';
+      html += '<span class="pkg-arrow">→</span>';
+      html += '<span class="pkg-v"><strong>' + escapeHTML(p.available || '?') + '</strong></span>';
+      html += '<span class="pkg-status" data-pkg-status="' + escapeHTML(pid) + '">' + pkgStatusChip(effectiveStatus) + '</span>';
+      html += '<button class="btn btn-sm btn-cta-outline" data-action="upgrade-one" data-host="' + escapeHTML(pc.hostname) + '" data-id="' + escapeHTML(pid) + '" data-name="' + escapeHTML(pname) + '"' + (disabled ? ' disabled' : '') + '>' + (disabled ? '…' : 'Upgrade') + '</button>';
+      html += '</label>';
+    }
+    html += '</div>';
+  }
+  html += '</section>';
+  html += '</div>'; // /winget
+
+  // ---- Windows updates panel --------------------------------------------
+  html += '<div class="modal-panel' + (prevTab==="wu"?' is-active':'') + '" data-modal-panel="wu">';
+  html += '<section class="section" data-wu-section>';
+  html += '<div class="section-hd"><div class="section-title">Pending Windows updates (' + wu.length + ')</div>';
+  if (wu.length > 0) {
+    const running = !!wuAllState;
+    const label = wuAllState === 'pending' ? 'Queued…' : wuAllState === 'delivered' ? 'Running…' : 'Install all';
+    html += '<button class="btn btn-sm btn-primary" id="wu-install-all-btn" data-action="wu-install-all" data-host="' + escapeHTML(pc.hostname) + '"' + (running?' disabled':'') + '>' + escapeHTML(label) + '</button>';
+  }
+  html += '</div>';
+  if (wu.length === 0) {
+    html += '<div class="card-empty">No Windows updates pending.</div>';
+  } else {
+    html += '<div class="wu-list">';
+    for (const u of wu) {
+      const id = u.update_id || '';
+      const sev = (u.severity || '').toLowerCase();
+      const effStatus = wuAllState || wuLiveStatus[id]?.status || '';
+      const rowCls = effStatus === 'pending' || effStatus === 'delivered' ? ' is-running' : '';
+      const disabled = effStatus === 'pending' || effStatus === 'delivered';
+      const sizeMB = u.size ? (Math.round((u.size/1024/1024)*10)/10).toFixed(1) + ' MB' : '';
+      const kbs = Array.isArray(u.kb) ? u.kb.filter(Boolean) : [];
+      const kbHTML = kbs.length ? kbs.map(k => '<span class="wu-kb">KB' + escapeHTML(k) + '</span>').join(' ') : '';
+
+      html += '<div class="wu' + rowCls + '" data-wu-row="' + escapeHTML(id) + '">';
+      // col 1: icon-ish severity dot
+      html += '<span class="wu-severity ' + escapeHTML(sev) + '">' + (u.severity ? escapeHTML(u.severity) : '&nbsp;') + '</span>';
+      // col 2: title + meta
+      html += '<div><div class="wu-title">' + escapeHTML(u.title || '(untitled)') + '</div>';
+      html += '<div class="wu-meta">' + kbHTML + (kbHTML && sizeMB ? ' · ' : '') + (sizeMB ? escapeHTML(sizeMB) : '') + (u.reboot_required ? ' · <span style="color:var(--c-warning);font-weight:600">reboot required</span>' : '') + '</div></div>';
+      // col 3: status chip
+      html += '<span class="pkg-status" data-wu-status="' + escapeHTML(id) + '">' + pkgStatusChip(effStatus) + '</span>';
+      // col 4: install button
+      html += '<button class="btn btn-sm btn-cta-outline" data-action="wu-install-one" data-host="' + escapeHTML(pc.hostname) + '" data-id="' + escapeHTML(id) + '" data-name="' + escapeHTML(u.title || '') + '"' + (disabled?' disabled':'') + '>' + (disabled ? '…' : 'Install') + '</button>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+  html += '</section>';
+  html += '</div>'; // /wu
+
+  // Recent tasks / users / admins — belong with Overview. Re-open the panel
+  // (hidden unless Overview is selected) and drop them in.
+  html += '<div class="modal-panel' + (prevTab==="overview"?' is-active':'') + '" data-modal-panel="overview">';
+
+  if (pc.tasks && pc.tasks.length) {
+    html += '<section class="section">';
+    html += '<div class="section-hd"><div class="section-title">Recent tasks</div></div>';
+    html += '<div class="tbl-wrap"><table class="tbl">';
+    html += '<thead><tr><th>When</th><th>Type</th><th>Package</th><th>Status</th><th>Result</th></tr></thead><tbody>';
+    for (const t of pc.tasks) {
+      const st = t.status === 'completed' ? 'ok' : t.status === 'failed' ? 'danger' : t.status === 'delivered' ? 'info' : 'warn';
+      html += '<tr>';
+      html += '<td class="sub">' + escapeHTML(t.created_at || '') + '</td>';
+      html += '<td>' + escapeHTML(t.type) + '</td>';
+      html += '<td class="sub">' + escapeHTML(t.package_name || t.package_id || '—') + '</td>';
+      html += '<td><span class="chip ' + st + '"><span class="dot"></span>' + escapeHTML(t.status) + '</span></td>';
+      html += '<td class="sub">' + escapeHTML(t.result || '') + '</td>';
+      html += '</tr>';
+    }
+    html += '</tbody></table></div>';
+    html += '</section>';
+  }
+
+  if (admins.length) {
+    html += '<section class="section">';
+    html += '<div class="section-hd"><div class="section-title">Local administrators (' + admins.length + ')</div></div>';
+    html += '<ul style="list-style:none;padding:0;display:grid;gap:6px">';
+    for (const a of admins) html += '<li class="chip info" style="justify-self:start">' + escapeHTML(a.name || a) + '</li>';
+    html += '</ul></section>';
+  }
+  if (users.length) {
+    html += '<section class="section">';
+    html += '<div class="section-hd"><div class="section-title">Local users (' + users.length + ')</div></div>';
+    html += '<div class="tbl-wrap"><table class="tbl">';
+    html += '<thead><tr><th>Name</th><th>Full name</th><th>Enabled</th><th>Last logon</th></tr></thead><tbody>';
+    for (const u of users) {
+      html += '<tr><td><strong>' + escapeHTML(u.name || '') + '</strong></td>';
+      html += '<td class="sub">' + escapeHTML(u.full_name || '') + '</td>';
+      html += '<td>' + (u.enabled ? '<span class="chip ok"><span class="dot"></span>enabled</span>' : '<span class="chip muted">disabled</span>') + '</td>';
+      html += '<td class="sub">' + escapeHTML(u.last_logon || '') + '</td></tr>';
+    }
+    html += '</tbody></table></div></section>';
+  }
+  html += '</div>'; // /overview (continuation)
+  document.getElementById('device-modal-body').innerHTML = html;
+  bindBulkSelect();
+  bindModalTabs();
+}
+
+function bindModalTabs() {
+  document.querySelectorAll('[data-modal-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.modalTab;
+      document.querySelectorAll('[data-modal-tab]').forEach(b => b.classList.toggle('is-active', b.dataset.modalTab === key));
+      document.querySelectorAll('[data-modal-panel]').forEach(p => p.classList.toggle('is-active', p.dataset.modalPanel === key));
+    });
+  });
+}
+
+// One-time binding for the persistent log-clear button.
+document.getElementById('log-clear-btn')?.addEventListener('click', () => {
+  const el = document.getElementById('live-log');
+  if (el) el.innerHTML = '';
+});
+
+// ---- Bulk select / deselect / bulk upgrade -------------------------------
+function bindBulkSelect() {
+  const bar = document.getElementById('bulk-bar');
+  if (!bar) return;
+  const all = document.getElementById('select-all');
+  const deselect = document.getElementById('deselect-all');
+  const bulk = document.getElementById('bulk-upgrade');
+  const countEl = bar.querySelector('.bulk-count');
+  const boxes = () => Array.from(document.querySelectorAll('.pkg-check'));
+  const checked = () => boxes().filter(b => b.checked);
+
+  function syncState() {
+    const sel = checked();
+    countEl.textContent = sel.length;
+    bar.classList.toggle('is-hidden', sel.length === 0);
+    // sync select-all state
+    if (all) {
+      const all_cnt = boxes().length;
+      all.checked = sel.length > 0 && sel.length === all_cnt;
+      all.indeterminate = sel.length > 0 && sel.length < all_cnt;
+    }
+    // row visual state
+    boxes().forEach(b => b.closest('.pkg').classList.toggle('is-checked', b.checked));
+  }
+
+  boxes().forEach(b => b.addEventListener('change', syncState));
+  if (all) all.addEventListener('change', () => { boxes().forEach(b => b.checked = all.checked); syncState(); });
+  if (deselect) deselect.addEventListener('click', () => { boxes().forEach(b => b.checked = false); syncState(); });
+  if (bulk) bulk.addEventListener('click', async () => {
+    const sel = checked();
+    if (!sel.length) return;
+    const host = bulk.dataset.host;
+    bulk.disabled = true; bulk.textContent = 'Queuing…';
+    popLogPane();
+    let ok = 0, fail = 0;
+    for (const b of sel) {
+      setPkgRowStatus(b.dataset.id, 'pending');
+      try {
+        await createTaskQuiet({ hostname: host, type: 'upgrade_package', package_id: b.dataset.id, package_name: b.dataset.name });
+        ok++;
+      } catch {
+        fail++;
+        setPkgRowStatus(b.dataset.id, 'failed');
+      }
+    }
+    bulk.disabled = false; bulk.textContent = 'Upgrade selected';
+    toast(ok + ' task(s) queued' + (fail ? (', ' + fail + ' failed') : ''), fail ? 'warn' : 'ok');
+    boxes().forEach(b => b.checked = false); syncState();
+  });
+}
+
+async function createTaskQuiet(payload) {
+  const res = await fetch(API + '?action=create_task', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json();
+  if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
+  return json;
+}
+
+// Only the checkbox itself toggles the row selection. Everything else inside
+// the label (including the Upgrade button) must not trigger a toggle.
+document.addEventListener('click', (e) => {
+  const lbl = e.target.closest('label.pkg');
+  if (!lbl) return;
+  if (e.target.closest('.pkg-check')) return; // native toggle
+  e.preventDefault();
+}, true);
+
+// ---- WebSocket live updates ----------------------------------------------
+const wsEl = document.getElementById('ws-status');
+const wsLabel = wsEl?.querySelector('.ws-label');
+function setWsState(state, label) {
+  if (!wsEl) return;
+  wsEl.classList.remove('is-live', 'is-down');
+  wsEl.classList.add(state === 'live' ? 'is-live' : 'is-down');
+  if (wsLabel) wsLabel.textContent = label;
+}
+let wsBackoff = 1000;
+let ws;
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = proto + '//' + location.host + '/api/?action=ws';
+  try { ws = new WebSocket(url); }
+  catch (e) { setWsState('down', 'offline'); scheduleReconnect(); return; }
+  ws.onopen = () => { setWsState('live', 'live'); wsBackoff = 1000; };
+  ws.onclose = () => { setWsState('down', 'offline'); scheduleReconnect(); };
+  ws.onerror = () => { /* close will fire next */ };
+  ws.onmessage = (e) => {
+    try {
+      const ev = JSON.parse(e.data);
+      handleWsEvent(ev);
+    } catch (err) { /* ignore */ }
+  };
+}
+function scheduleReconnect() {
+  wsBackoff = Math.min(wsBackoff * 2, 30000);
+  setTimeout(connectWS, wsBackoff);
+}
+function handleWsEvent(ev) {
+  if (ev.type === 'hello') return;
+  if (ev.type === 'pc' && ev.data) {
+    renderOrUpdateRow(ev.data);
+    // if modal is open for this host, soft-refresh its body
+    const modalTitle = document.getElementById('device-modal-title');
+    if (modal.classList.contains('is-open') && modalTitle && modalTitle.textContent === ev.data.hostname) {
+      renderDeviceModal(ev.data);
+    }
+  } else if (ev.type === 'task' && ev.data) {
+    const modalTitle = document.getElementById('device-modal-title');
+    const open = modal.classList.contains('is-open') && modalTitle && modalTitle.textContent === ev.data.hostname;
+    if (open) {
+      if (ev.data.type === 'upgrade_all') {
+        setAllUpgradeState(ev.data.status);
+      } else if (ev.data.type === 'windows_update_all') {
+        setWUAllState(ev.data.status);
+      } else if (ev.data.type === 'windows_update_single' && ev.data.package_id) {
+        setWURowStatus(ev.data.package_id, ev.data.status, { flash: ev.data.status === 'completed' });
+      } else if (ev.data.package_id) {
+        setPkgRowStatus(ev.data.package_id, ev.data.status, { flash: ev.data.status === 'completed' });
+      }
+      // If an upgrade finished (success or fail), the agent will shortly emit
+      // a post_task_report → 'pc' event that refreshes the full modal and
+      // drops any package that's no longer pending. Nothing more to do here.
+    }
+  } else if (ev.type === 'pc_online' && ev.data) {
+    updateOnlinePill(ev.data.hostname, !!ev.data.online);
+  } else if (ev.type === 'log' && ev.data) {
+    appendLogLine(ev.data);
+  } else if (ev.type === 'pc_removed' && ev.data) {
+    const host = ev.data.hostname;
+    const tr = document.querySelector('#device-table tbody tr[data-host="' + cssEscape(host) + '"]');
+    if (tr) { tr.style.transition = 'opacity .4s'; tr.style.opacity = '0'; setTimeout(() => tr.remove(), 400); setTimeout(updateStats, 500); }
+    // Close the modal if we're looking at the removed host.
+    const modalTitle = document.getElementById('device-modal-title');
+    if (modal.classList.contains('is-open') && modalTitle && modalTitle.textContent === host) closeModal();
+    toast(host + ' removed from server', 'ok');
+  } else if (ev.type === 'domain' && ev.data) {
+    // visual hint only; full reload keeps table simple and consistent.
+    toast('Domain list changed — refreshing', 'ok');
+    setTimeout(() => location.reload(), 600);
+  }
+}
+connectWS();
+
+// ---- Live row update ------------------------------------------------------
+function renderOrUpdateRow(pc) {
+  const tbody = document.querySelector('#device-table tbody');
+  if (!tbody) return;
+  const existing = tbody.querySelector('tr[data-host="' + cssEscape(pc.hostname) + '"]');
+  const tr = document.createElement('tr');
+  tr.className = 'is-clickable is-flash';
+  tr.dataset.host = pc.hostname;
+  tr.dataset.domain = pc.domain || '';
+  tr.dataset.search = [pc.hostname, pc.domain || '', pc.os_version || ''].join(' ');
+  tr.innerHTML = renderRowCells(pc);
+  if (existing) existing.replaceWith(tr);
+  else {
+    // remove empty-state row if present
+    const empty = tbody.querySelector('td[colspan]');
+    if (empty) empty.parentElement.remove();
+    tbody.prepend(tr);
+  }
+  applyFilter();
+  updateStats();
+}
+
+function renderRowCells(pc) {
+  const last = pc.last_seen ? new Date(pc.last_seen) : null;
+  const lastFmt = last ? (last.toISOString().slice(0,16).replace('T', ' ')) : 'Never';
+  const wc = (typeof pc.update_count === 'number') ? pc.update_count : -1;
+  let uc;
+  try {
+    const arr = pc.windows_updates ? (typeof pc.windows_updates === 'string' ? JSON.parse(pc.windows_updates) : pc.windows_updates) : null;
+    uc = Array.isArray(arr) ? arr.length : -1;
+  } catch { uc = -1; }
+
+  function updChip(label, n) {
+    if (n < 0)  return '<span class="chip upd-unknown"><span class="src">' + label + '</span>?</span>';
+    if (n === 0) return '<span class="chip upd-clean"><span class="src">' + label + '</span>0</span>';
+    return '<span class="chip upd-pending"><span class="src">' + label + '</span>' + n + '</span>';
+  }
+  const updatesCell = '<div class="upd-stack">' + updChip('winget', wc) + updChip('WU', uc) + '</div>';
+
+  let statusChip;
+  if (!pc.last_seen)             statusChip = '<span class="chip muted"><span class="dot"></span>never seen</span>';
+  else if (wc < 0 && uc < 0)     statusChip = '<span class="chip muted"><span class="dot"></span>unknown</span>';
+  else if (wc > 0 || uc > 0)     statusChip = '<span class="chip warn"><span class="dot"></span>updates pending</span>';
+  else                            statusChip = '<span class="chip ok"><span class="dot"></span>up to date</span>';
+
+  const host = escapeHTML(pc.hostname);
+  const onlineChip = pc.online
+    ? '<span class="chip online" data-host-online><span class="dot"></span>online</span>'
+    : '<span class="chip offline" data-host-online><span class="dot"></span>offline</span>';
+  return '' +
+    '<td><div style="display:flex;align-items:center;gap:8px"><span class="hostname">' + host + '</span>' + onlineChip + '</div>' +
+      (pc.check_user ? '<div class="sub">' + escapeHTML(pc.check_user) + '</div>' : '') +
+    '</td>' +
+    '<td>' + (pc.domain ? ('<span class="chip muted">' + escapeHTML(pc.domain) + '</span>') : '<span class="chip muted">—</span>') + '</td>' +
+    '<td class="sub os-cell">' + escapeHTML(pc.os_version || '—') + '</td>' +
+    '<td class="sub">' + lastFmt + '</td>' +
+    '<td>' + updatesCell + '</td>' +
+    '<td>' + statusChip + '</td>' +
+    '<td><div class="row-actions">' +
+      '<button class="btn btn-sm" data-action="view" data-host="' + host + '">Details</button>' +
+      '<button class="btn btn-sm btn-primary" data-action="upgrade-all" data-host="' + host + '">Upgrade all</button>' +
+    '</div></td>';
+}
+
+function updateStats() {
+  const rows = Array.from(document.querySelectorAll('#device-table tbody tr[data-host]'));
+  let total = rows.length, withU = 0, ok = 0, never = 0;
+  rows.forEach(tr => {
+    // The status chip is the source of truth; it now considers winget + WU.
+    const status = tr.querySelector('td:nth-last-child(2)')?.textContent || '';
+    if (status.includes('updates pending')) withU++;
+    else if (status.includes('up to date')) ok++;
+    if (status.includes('never seen')) never++;
+  });
+  const vals = document.querySelectorAll('.stat-value');
+  if (vals[0]) vals[0].textContent = total;
+  if (vals[1]) vals[1].textContent = withU;
+  if (vals[2]) vals[2].textContent = ok;
+  if (vals[3]) vals[3].textContent = never;
+}
+
+function cssEscape(s) { return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/"/g, '\\"'); }
+
+// ---- online pill + live log -----------------------------------------------
+function updateOnlinePill(host, online) {
+  const tr = document.querySelector('#device-table tbody tr[data-host="' + cssEscape(host) + '"]');
+  if (tr) {
+    tr.dataset.online = online ? '1' : '0';
+    const chip = tr.querySelector('[data-host-online]');
+    if (chip) {
+      chip.className = 'chip ' + (online ? 'online' : 'offline');
+      chip.innerHTML = '<span class="dot"></span>' + (online ? 'online' : 'offline');
+    }
+  }
+}
+
+function appendLogLine(data) {
+  // Only render log frames for the host whose modal is currently open.
+  const log = document.getElementById('live-log');
+  if (!log) return;
+  if (log.dataset.host !== data.hostname) return;
+  const line = document.createElement('span');
+  line.className = 'log-line';
+  line.innerHTML = '<span class="log-ts">' + escapeHTML(data.ts || '') + '</span>' + escapeHTML(data.line || '');
+  log.appendChild(line);
+  // Cap at ~1000 lines to avoid memory bloat.
+  while (log.childElementCount > 1000) log.removeChild(log.firstChild);
+  // Auto-scroll to bottom.
+  log.scrollTop = log.scrollHeight;
+}
+
+// Map a task status to the chip HTML shown next to each package row.
+function pkgStatusChip(status) {
+  switch (status) {
+    case 'pending':   return '<span class="chip info" title="Queued — waiting for the agent to pick it up"><span class="dot"></span>queued</span>';
+    case 'delivered': return '<span class="chip info" title="Running on the host"><span class="dot is-spin"></span>running</span>';
+    case 'completed': return '<span class="chip ok" title="Completed"><span class="dot"></span>done</span>';
+    case 'failed':    return '<span class="chip danger" title="Failed"><span class="dot"></span>failed</span>';
+    default:          return '';
+  }
+}
+
+// Update a single package row with a new task status (queued/running/done/failed).
+function setPkgRowStatus(pid, status, opts) {
+  const row = document.querySelector('label.pkg[data-pkg-row="' + cssEscape(pid) + '"]');
+  if (!row) return;
+  const chip = row.querySelector('.pkg-status');
+  if (chip) chip.innerHTML = pkgStatusChip(status);
+  row.classList.remove('is-running', 'is-done', 'is-failed');
+  if (status === 'pending' || status === 'delivered') {
+    row.classList.add('is-running');
+  } else if (status === 'completed') {
+    row.classList.add('is-done');
+  } else if (status === 'failed') {
+    row.classList.add('is-failed');
+  }
+  const cb = row.querySelector('.pkg-check');
+  const btn = row.querySelector('button[data-action="upgrade-one"]');
+  const locked = status === 'pending' || status === 'delivered';
+  if (cb) cb.disabled = locked;
+  if (btn) {
+    btn.disabled = locked;
+    btn.textContent = locked ? '…' : 'Upgrade';
+  }
+  if (opts && opts.flash) {
+    row.animate(
+      [{ background: '#DBEAFE' }, { background: getComputedStyle(row).backgroundColor }],
+      { duration: 900, easing: 'ease-out' }
+    );
+  }
+}
+
+// Update the global "Upgrade all" button when an upgrade_all task comes in.
+function setAllUpgradeState(status) {
+  const btn = document.getElementById('upgrade-all-btn');
+  if (btn) {
+    const running = status === 'pending' || status === 'delivered';
+    btn.disabled = running;
+    btn.textContent = status === 'pending' ? 'Upgrading all…' : status === 'delivered' ? 'Running…' : 'Upgrade all';
+  }
+  // Paint every pkg row with the same status until a fresh pc update arrives.
+  document.querySelectorAll('label.pkg[data-pkg-row]').forEach(row => {
+    setPkgRowStatus(row.dataset.pkgRow, status || 'pending');
+  });
+}
+
+// -- Windows updates: per-row + install-all state helpers -----------------
+function setWURowStatus(id, status, opts) {
+  const row = document.querySelector('.wu[data-wu-row="' + cssEscape(id) + '"]');
+  if (!row) return;
+  const chip = row.querySelector('[data-wu-status]');
+  if (chip) chip.innerHTML = pkgStatusChip(status);
+  row.classList.toggle('is-running', status === 'pending' || status === 'delivered');
+  const btn = row.querySelector('button[data-action="wu-install-one"]');
+  if (btn) {
+    const locked = status === 'pending' || status === 'delivered';
+    btn.disabled = locked;
+    btn.textContent = locked ? '…' : 'Install';
+  }
+  if (opts && opts.flash) {
+    row.animate([{ background: '#DBEAFE' }, { background: getComputedStyle(row).backgroundColor }],
+      { duration: 900, easing: 'ease-out' });
+  }
+}
+
+function setWUAllState(status) {
+  const btn = document.getElementById('wu-install-all-btn');
+  if (btn) {
+    const running = status === 'pending' || status === 'delivered';
+    btn.disabled = running;
+    btn.textContent = status === 'pending' ? 'Queued…' : status === 'delivered' ? 'Running…' : 'Install all';
+  }
+  document.querySelectorAll('.wu[data-wu-row]').forEach(row => {
+    setWURowStatus(row.dataset.wuRow, status || 'pending');
+  });
+}
+
+// ---- user menu / logout ---------------------------------------------------
+const userBtn = document.getElementById('user-btn');
+const userPop = document.getElementById('user-pop');
+userBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  userPop.classList.toggle('is-open');
+  userBtn.setAttribute('aria-expanded', userPop.classList.contains('is-open'));
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.user-menu')) userPop?.classList.remove('is-open');
+});
+
+document.getElementById('logout-btn')?.addEventListener('click', async () => {
+  try {
+    await fetch(API + '?action=logout', { method: 'POST', credentials: 'same-origin' });
+  } catch {}
+  location.replace('/login');
+});
+
+// ---- Force-remove button -------------------------------------------------
+document.getElementById('force-remove-btn')?.addEventListener('click', async (e) => {
+  const host = e.currentTarget.dataset.host;
+  if (!host) return;
+  if (!confirm('Force-remove ' + host + ' from the server? The agent on that host (if any) will be left installed — use the normal "Uninstall & remove" when possible. Continue?')) return;
+  try {
+    const res = await fetch(API + '?action=remove_device', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ hostname: host, force: true }),
+    });
+    const j = await res.json();
+    if (!res.ok || j.error) throw new Error(j.error || 'HTTP ' + res.status);
+    toast(host + ' force-removed', 'ok');
+    closeModal();
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+// Patch viewDevice so the force-remove button also gets the host.
+const _origViewDevice = viewDevice;
+viewDevice = async function(host) {
+  document.getElementById('force-remove-btn').dataset.host = host;
+  return _origViewDevice(host);
+};
+
+// ---- Profile / TOTP ------------------------------------------------------
+const profileModal = document.getElementById('profile-modal');
+function openProfile() {
+  document.getElementById('profile-sub').textContent = CURRENT_USER.username + ' · ' + CURRENT_USER.role;
+  renderTOTPState();
+  profileModal.classList.add('is-open');
+  document.body.style.overflow = 'hidden';
+}
+document.getElementById('open-profile')?.addEventListener('click', () => { userPop.classList.remove('is-open'); openProfile(); });
+profileModal.addEventListener('click', (e) => {
+  if (e.target === profileModal || e.target.closest('[data-close]')) {
+    profileModal.classList.remove('is-open'); document.body.style.overflow = '';
+  }
+});
+
+function renderTOTPState() {
+  const box = document.getElementById('totp-state');
+  if (CURRENT_USER.totp_enabled) {
+    box.innerHTML = '<div class="totp-box">' +
+      '<strong>Two-factor is enabled.</strong>' +
+      '<div style="margin-top:6px;color:var(--c-muted);font-size:12px">You will be prompted for a 6-digit code at sign-in.</div>' +
+      '<div style="margin-top:10px"><button class="btn btn-danger btn-sm" id="totp-disable-btn">Disable 2FA</button></div>' +
+      '</div>';
+    document.getElementById('totp-disable-btn').addEventListener('click', totpDisable);
+  } else {
+    box.innerHTML = '<div class="totp-box">' +
+      'Two-factor is <strong>not enabled</strong>. Protect this account with an authenticator app (Google Authenticator, 1Password, Authy, …).' +
+      '<div style="margin-top:10px"><button class="btn btn-primary btn-sm" id="totp-begin-btn">Enable 2FA</button></div>' +
+      '</div>';
+    document.getElementById('totp-begin-btn').addEventListener('click', totpBegin);
+  }
+}
+
+async function totpBegin() {
+  try {
+    const res = await fetch(API + '?action=totp_begin', { method: 'POST', credentials: 'same-origin' });
+    const j = await res.json();
+    if (!res.ok || j.error) throw new Error(j.error || 'HTTP ' + res.status);
+    const box = document.getElementById('totp-state');
+    box.innerHTML = '<div class="totp-box">' +
+      '<div>Open your authenticator app and add a new account. Paste this URL, <strong>or</strong> type the secret manually:</div>' +
+      '<div style="margin-top:10px"><span class="totp-secret" id="totp-secret">' + escapeHTML(j.secret) + '</span></div>' +
+      '<div class="mono" style="font-size:11px;color:var(--c-muted);word-break:break-all;margin-top:6px">' + escapeHTML(j.otpauth_url) + '</div>' +
+      '<div class="field" style="margin-top:12px"><label>Enter the current 6-digit code</label><input type="text" id="totp-verify" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000"></div>' +
+      '<div style="margin-top:10px;display:flex;gap:8px"><button class="btn btn-primary btn-sm" id="totp-enable-btn">Verify &amp; enable</button><button class="btn btn-sm" id="totp-cancel-btn">Cancel</button></div>' +
+      '</div>';
+    document.getElementById('totp-enable-btn').addEventListener('click', () => totpEnable(j.secret));
+    document.getElementById('totp-cancel-btn').addEventListener('click', renderTOTPState);
+    document.getElementById('totp-verify').focus();
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+async function totpEnable(secret) {
+  const code = document.getElementById('totp-verify').value.trim();
+  try {
+    const res = await fetch(API + '?action=totp_enable', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ secret, code }),
+    });
+    const j = await res.json();
+    if (!res.ok || j.error) throw new Error(j.error || 'HTTP ' + res.status);
+    CURRENT_USER.totp_enabled = true;
+    toast('Two-factor enabled', 'ok');
+    renderTOTPState();
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+async function totpDisable() {
+  const pw = prompt('Enter your current password to disable 2FA:');
+  if (!pw) return;
+  try {
+    const res = await fetch(API + '?action=totp_disable', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ current_password: pw }),
+    });
+    const j = await res.json();
+    if (!res.ok || j.error) throw new Error(j.error || 'HTTP ' + res.status);
+    CURRENT_USER.totp_enabled = false;
+    toast('Two-factor disabled', 'ok');
+    renderTOTPState();
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+document.getElementById('pw-save-btn')?.addEventListener('click', async () => {
+  const cur = document.getElementById('pw-current').value;
+  const nw = document.getElementById('pw-new').value;
+  if (!cur || !nw) { toast('Fill both fields', 'warn'); return; }
+  try {
+    const res = await fetch(API + '?action=change_password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ current_password: cur, new_password: nw }),
+    });
+    const j = await res.json();
+    if (!res.ok || j.error) throw new Error(j.error || 'HTTP ' + res.status);
+    document.getElementById('pw-current').value = '';
+    document.getElementById('pw-new').value = '';
+    toast('Password updated', 'ok');
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+// ---- User management (admin) --------------------------------------------
+const usersTableBody = document.querySelector('#users-table tbody');
+const userModal = document.getElementById('user-modal');
+let _editingUserId = 0;
+
+async function loadUsers() {
+  if (CURRENT_USER.role !== 'admin') return;
+  try {
+    const res = await fetch(API + '?action=users', { credentials: 'same-origin' });
+    const users = await res.json();
+    if (!res.ok) throw new Error(users.error || 'HTTP ' + res.status);
+    renderUsersTable(users);
+  } catch (err) { usersTableBody.innerHTML = '<tr><td colspan="6"><div class="banner is-err">' + escapeHTML(err.message) + '</div></td></tr>'; }
+}
+
+function renderUsersTable(users) {
+  if (!users.length) { usersTableBody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-title">No users</div></div></td></tr>'; return; }
+  usersTableBody.innerHTML = users.map(u => {
+    const roleClass = 'chip role-' + u.role;
+    const twofa = u.totp_enabled ? '<span class="chip ok"><span class="dot"></span>enabled</span>' : '<span class="chip muted">off</span>';
+    return '<tr data-user-id="' + u.id + '">' +
+      '<td><strong>' + escapeHTML(u.username) + '</strong></td>' +
+      '<td><span class="' + roleClass + '">' + escapeHTML(u.role) + '</span></td>' +
+      '<td>' + twofa + '</td>' +
+      '<td class="sub">' + (u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'Never') + '</td>' +
+      '<td class="sub">' + new Date(u.created_at).toLocaleDateString() + '</td>' +
+      '<td style="text-align:right"><div class="row-actions">' +
+        '<button class="btn btn-sm" data-user-action="edit" data-id="' + u.id + '" data-username="' + escapeHTML(u.username) + '" data-role="' + u.role + '">Edit</button>' +
+        '<button class="btn btn-sm btn-danger" data-user-action="delete" data-id="' + u.id + '" data-username="' + escapeHTML(u.username) + '">Delete</button>' +
+      '</div></td></tr>';
+  }).join('');
+}
+
+document.querySelector('[data-tab="users"]')?.addEventListener('click', loadUsers);
+document.getElementById('new-user-btn')?.addEventListener('click', () => openUserModal());
+usersTableBody?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-user-action]');
+  if (!btn) return;
+  const a = btn.dataset.userAction;
+  if (a === 'edit') openUserModal({ id: +btn.dataset.id, username: btn.dataset.username, role: btn.dataset.role });
+  if (a === 'delete') deleteUser(+btn.dataset.id, btn.dataset.username);
+});
+
+function openUserModal(existing) {
+  _editingUserId = existing?.id || 0;
+  document.getElementById('user-modal-title').textContent = existing ? ('Edit ' + existing.username) : 'Add user';
+  document.getElementById('user-edit-id').value = existing?.id || '';
+  document.getElementById('user-username-field').style.display = existing ? 'none' : '';
+  document.getElementById('user-username').value = existing?.username || '';
+  document.getElementById('user-role').value = existing?.role || 'viewer';
+  document.getElementById('user-password').value = '';
+  document.getElementById('user-password-label').textContent = existing ? 'New password (leave blank to keep)' : 'Password';
+  document.getElementById('user-password-hint').textContent = existing ? 'Leave empty to keep existing password.' : 'Minimum 8 characters.';
+  userModal.classList.add('is-open');
+  document.body.style.overflow = 'hidden';
+}
+userModal.addEventListener('click', (e) => {
+  if (e.target === userModal || e.target.closest('[data-close]')) {
+    userModal.classList.remove('is-open'); document.body.style.overflow = '';
+  }
+});
+
+document.getElementById('user-save-btn')?.addEventListener('click', async () => {
+  const id = _editingUserId;
+  const role = document.getElementById('user-role').value;
+  const password = document.getElementById('user-password').value;
+  try {
+    if (id) {
+      const body = { id, role };
+      if (password) body.password = password;
+      const res = await fetch(API + '?action=update_user', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+        body: JSON.stringify(body),
+      });
+      const j = await res.json();
+      if (!res.ok || j.error) throw new Error(j.error || 'HTTP ' + res.status);
+      toast('User updated', 'ok');
+    } else {
+      const username = document.getElementById('user-username').value.trim();
+      if (!username || password.length < 8) { toast('Username + 8-char password required', 'warn'); return; }
+      const res = await fetch(API + '?action=create_user', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+        body: JSON.stringify({ username, password, role }),
+      });
+      const j = await res.json();
+      if (!res.ok || j.error) throw new Error(j.error || 'HTTP ' + res.status);
+      toast('User created', 'ok');
+    }
+    userModal.classList.remove('is-open'); document.body.style.overflow = '';
+    loadUsers();
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+async function deleteUser(id, username) {
+  if (!confirm('Delete user ' + username + '? This also invalidates their active sessions.')) return;
+  try {
+    const res = await fetch(API + '?action=delete_user', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ id }),
+    });
+    const j = await res.json();
+    if (!res.ok || j.error) throw new Error(j.error || 'HTTP ' + res.status);
+    toast('User deleted', 'ok');
+    loadUsers();
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+
+function safeParse(v) {
+  if (v == null) return null;
+  if (typeof v === 'object') return v;
+  try { return JSON.parse(v); } catch { return null; }
+}
+
+function fmtAgo(iso) {
+  if (!iso) return '';
+  const d = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (d < 60) return Math.floor(d) + 's ago';
+  if (d < 3600) return Math.floor(d/60) + 'm ago';
+  if (d < 86400) return Math.floor(d/3600) + 'h ago';
+  return Math.floor(d/86400) + 'd ago';
+}
+
+// ---- Action dispatch ------------------------------------------------------
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) {
+    // row click → view
+    const row = e.target.closest('tr[data-host]');
+    if (row && !e.target.closest('button')) viewDevice(row.dataset.host);
+    return;
+  }
+  e.stopPropagation();
+  const a = btn.dataset.action;
+  if (a === 'view') return viewDevice(btn.dataset.host);
+  if (a === 'upgrade-all') {
+    setAllUpgradeState('pending');
+    popLogPane();
+    return createTask({ hostname: btn.dataset.host, type: 'upgrade_all' }, 'Upgrade queued');
+  }
+  if (a === 'upgrade-one') {
+    setPkgRowStatus(btn.dataset.id, 'pending');
+    popLogPane();
+    return createTask({ hostname: btn.dataset.host, type: 'upgrade_package', package_id: btn.dataset.id, package_name: btn.dataset.name }, 'Package upgrade queued');
+  }
+  if (a === 'wu-install-all') {
+    setWUAllState('pending');
+    popLogPane();
+    return createTask({ hostname: btn.dataset.host, type: 'windows_update_all' }, 'Windows Update install queued');
+  }
+  if (a === 'wu-install-one') {
+    setWURowStatus(btn.dataset.id, 'pending');
+    popLogPane();
+    return createTask({ hostname: btn.dataset.host, type: 'windows_update_single', package_id: btn.dataset.id, package_name: btn.dataset.name }, 'Windows Update queued');
+  }
+  if (a === 'remove-domain') return removeDomain(btn.dataset.id);
+});
+
+async function createTask(payload, okMsg) {
+  try {
+    const res = await fetch(API + '?action=create_task', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json();
+    if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
+    toast(okMsg, 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function removeDomain(id) {
+  if (!confirm('Remove this allowed domain? Enrollment from this domain will stop.')) return;
+  try {
+    const res = await fetch(API + '?action=remove_domain', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: parseInt(id,10) }),
+    });
+    const json = await res.json();
+    if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
+    document.querySelector('[data-domain-id="' + id + '"]')?.remove();
+    toast('Domain removed', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+// ---- Add domain -----------------------------------------------------------
+document.getElementById('add-domain-btn')?.addEventListener('click', async () => {
+  const domain = document.getElementById('new-domain').value.trim();
+  const notes = document.getElementById('new-domain-notes').value.trim();
+  if (!domain) { toast('Enter a domain', 'warn'); return; }
+  try {
+    const res = await fetch(API + '?action=add_domain', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain, notes }),
+    });
+    const json = await res.json();
+    if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
+    toast('Domain added. Reloading…', 'ok');
+    setTimeout(() => location.reload(), 700);
+  } catch (e) { toast(e.message, 'err'); }
+});
+
+// ---- Save settings --------------------------------------------------------
+document.getElementById('save-settings-btn')?.addEventListener('click', async () => {
+  const payload = {
+    check_interval_minutes: document.getElementById('s-check').value,
+    full_scan_interval_hours: document.getElementById('s-scan').value,
+    service_name: document.getElementById('s-svc').value,
+  };
+  try {
+    const res = await fetch(API + '?action=set_settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json();
+    if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
+    toast('Settings saved', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+});
+
+// ---- Remove device (uninstall + drop from DB) ----------------------------
+document.getElementById('remove-device-btn')?.addEventListener('click', async (e) => {
+  const host = e.currentTarget.dataset.host;
+  if (!host) return;
+  const confirmed = confirm(
+    'This will tell ' + host + ' to uninstall the Corrivex agent, ' +
+    'stop its service, and delete C:\\ProgramData\\Corrivex.\n\n' +
+    'Once the agent confirms, the device is also removed from the server.\n\nContinue?'
+  );
+  if (!confirmed) return;
+  try {
+    const res = await fetch(API + '?action=remove_device', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hostname: host }),
+    });
+    const json = await res.json();
+    if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
+    toast('Uninstall queued — waiting for ' + host + ' to report back', 'ok');
+    closeModal();
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+// ---- Copy bootstrap -------------------------------------------------------
+async function copyText(text) {
+  // Modern Clipboard API: only available in secure contexts (HTTPS or localhost).
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through */ }
+  }
+  // Legacy fallback: hidden textarea + execCommand('copy'). Works on plain HTTP.
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.top = '0';
+  ta.style.left = '0';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  ta.setSelectionRange(0, ta.value.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  document.body.removeChild(ta);
+  return ok;
+}
+
+document.getElementById('copy-bootstrap-btn')?.addEventListener('click', async () => {
+  const text = document.getElementById('bootstrap-cmd').textContent.trim();
+  const ok = await copyText(text);
+  if (ok) toast('Command copied to clipboard', 'ok');
+  else    toast('Copy failed — select the command and copy manually', 'warn');
+});
+</script>
+{{define "statusChip"}}
+  {{$wc := .UpdateCount}}{{$uc := .WindowsUpdateCount}}
+  {{if not .LastSeen}}<span class="chip muted"><span class="dot"></span>never seen</span>
+  {{else if and (lt $wc 0) (lt $uc 0)}}<span class="chip muted"><span class="dot"></span>unknown</span>
+  {{else if or (gt $wc 0) (gt $uc 0)}}<span class="chip warn"><span class="dot"></span>updates pending</span>
+  {{else}}<span class="chip ok"><span class="dot"></span>up to date</span>
+  {{end}}
+{{end}}
+</body>
+</html>

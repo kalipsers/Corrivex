@@ -1,0 +1,1215 @@
+// Package db is the Corrivex data layer. It supports two backends:
+// MariaDB/MySQL (the original target) and SQLite (single-file deployments,
+// typical for Windows). Driver is chosen via Config.Driver.
+package db
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	_ "github.com/go-sql-driver/mysql"
+	_ "modernc.org/sqlite"
+)
+
+// Driver picks the database backend.
+type Driver string
+
+const (
+	DriverMaria  Driver = "mariadb"
+	DriverSQLite Driver = "sqlite"
+)
+
+type Config struct {
+	Driver Driver
+
+	// MariaDB
+	Host    string
+	Port    int
+	Name    string
+	User    string
+	Pass    string
+	Charset string
+
+	// SQLite — path to the .db file. Created if missing.
+	Path string
+
+	// Common
+	Keep     int
+	CheckDom bool
+}
+
+type DB struct {
+	sql    *sql.DB
+	cfg    Config
+	driver Driver
+	hostRe *regexp.Regexp
+}
+
+// DriverName returns which backend this connection uses.
+func (d *DB) DriverName() Driver { return d.driver }
+
+func Open(cfg Config) (*DB, error) {
+	if cfg.Driver == "" {
+		cfg.Driver = DriverMaria
+	}
+	switch cfg.Driver {
+	case DriverMaria:
+		return openMaria(cfg)
+	case DriverSQLite:
+		return openSQLite(cfg)
+	default:
+		return nil, fmt.Errorf("unknown db driver %q", cfg.Driver)
+	}
+}
+
+func openMaria(cfg Config) (*DB, error) {
+	if cfg.Charset == "" {
+		cfg.Charset = "utf8mb4"
+	}
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=true&loc=Local&multiStatements=true",
+		cfg.User, cfg.Pass, cfg.Host, cfg.Port, cfg.Name, cfg.Charset)
+	sqldb, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err := sqldb.Ping(); err != nil {
+		// Try to create DB if missing
+		rootDSN := fmt.Sprintf("%s:%s@tcp(%s:%d)/?charset=%s&multiStatements=true",
+			cfg.User, cfg.Pass, cfg.Host, cfg.Port, cfg.Charset)
+		root, e2 := sql.Open("mysql", rootDSN)
+		if e2 != nil {
+			return nil, fmt.Errorf("connect: %w / bootstrap: %v", err, e2)
+		}
+		defer root.Close()
+		if _, e3 := root.Exec("CREATE DATABASE IF NOT EXISTS `" + cfg.Name + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"); e3 != nil {
+			return nil, fmt.Errorf("create db: %w", e3)
+		}
+		if err = sqldb.Ping(); err != nil {
+			return nil, err
+		}
+	}
+	sqldb.SetMaxOpenConns(20)
+	sqldb.SetMaxIdleConns(5)
+	sqldb.SetConnMaxLifetime(5 * time.Minute)
+	return &DB{sql: sqldb, cfg: cfg, driver: DriverMaria, hostRe: regexp.MustCompile(`[^a-zA-Z0-9_\-\.]`)}, nil
+}
+
+func openSQLite(cfg Config) (*DB, error) {
+	if cfg.Path == "" {
+		return nil, fmt.Errorf("sqlite: --db-path required")
+	}
+	if dir := filepath.Dir(cfg.Path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("mkdir %s: %w", dir, err)
+		}
+	}
+	dsn := cfg.Path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_time_format=sqlite"
+	sqldb, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err := sqldb.Ping(); err != nil {
+		return nil, err
+	}
+	// Serialize writes — SQLite has one writer at a time even in WAL.
+	sqldb.SetMaxOpenConns(8)
+	sqldb.SetMaxIdleConns(2)
+	sqldb.SetConnMaxLifetime(0)
+	return &DB{sql: sqldb, cfg: cfg, driver: DriverSQLite, hostRe: regexp.MustCompile(`[^a-zA-Z0-9_\-\.]`)}, nil
+}
+
+func (d *DB) Close() error { return d.sql.Close() }
+func (d *DB) SQL() *sql.DB { return d.sql }
+func (d *DB) NormalizeHost(h string) string {
+	return strings.ToUpper(d.hostRe.ReplaceAllString(strings.TrimSpace(h), "_"))
+}
+
+// -- Migrations -------------------------------------------------------------
+
+var migrations = []struct {
+	Version     int
+	Description string
+	Statements  []string
+}{
+	{1, "Initial schema", []string{
+		`CREATE TABLE IF NOT EXISTS schema_version (
+			version INT NOT NULL,
+			applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			description VARCHAR(255) NOT NULL DEFAULT ''
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS pcs (
+			id INT NOT NULL AUTO_INCREMENT,
+			hostname VARCHAR(255) NOT NULL,
+			last_seen DATETIME NULL,
+			update_count INT NOT NULL DEFAULT -1,
+			last_check_at DATETIME NULL,
+			last_upgrade_at DATETIME NULL,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_hostname (hostname)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS reports (
+			id BIGINT NOT NULL AUTO_INCREMENT,
+			hostname VARCHAR(255) NOT NULL,
+			action ENUM('check','upgrade','full_report','post_task_report','unknown') NOT NULL DEFAULT 'unknown',
+			reported_at DATETIME NOT NULL,
+			username VARCHAR(255) NULL,
+			ip VARCHAR(45) NULL,
+			output LONGTEXT NULL,
+			packages LONGTEXT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			KEY idx_hostname (hostname),
+			KEY idx_action (action),
+			KEY idx_host_action (hostname, action, reported_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	}},
+	{2, "Structured packages JSON", []string{
+		`ALTER TABLE reports ADD COLUMN IF NOT EXISTS packages LONGTEXT NULL`,
+		`ALTER TABLE pcs ADD COLUMN IF NOT EXISTS last_packages LONGTEXT NULL`,
+		`ALTER TABLE pcs ADD COLUMN IF NOT EXISTS last_exported LONGTEXT NULL`,
+	}},
+	{3, "Domains, tasks, system info", []string{
+		`CREATE TABLE IF NOT EXISTS allowed_domains (
+			id INT NOT NULL AUTO_INCREMENT,
+			domain VARCHAR(255) NOT NULL,
+			notes VARCHAR(500) NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_domain (domain)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS tasks (
+			id BIGINT NOT NULL AUTO_INCREMENT,
+			hostname VARCHAR(255) NOT NULL,
+			type ENUM('upgrade_all','upgrade_package','check') NOT NULL DEFAULT 'check',
+			package_id VARCHAR(255) NULL,
+			package_name VARCHAR(500) NULL,
+			status ENUM('pending','delivered','completed','failed') NOT NULL DEFAULT 'pending',
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			delivered_at DATETIME NULL,
+			completed_at DATETIME NULL,
+			result TEXT NULL,
+			PRIMARY KEY (id),
+			KEY idx_host_status (hostname, status)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`ALTER TABLE pcs ADD COLUMN IF NOT EXISTS domain VARCHAR(255) NULL`,
+		`ALTER TABLE pcs ADD COLUMN IF NOT EXISTS os_version VARCHAR(255) NULL`,
+		`ALTER TABLE pcs ADD COLUMN IF NOT EXISTS users LONGTEXT NULL`,
+		`ALTER TABLE pcs ADD COLUMN IF NOT EXISTS local_admins LONGTEXT NULL`,
+		`ALTER TABLE pcs ADD COLUMN IF NOT EXISTS last_full_report DATETIME NULL`,
+	}},
+	{4, "Fix reports.action ENUM", []string{
+		`ALTER TABLE reports MODIFY COLUMN action ENUM('check','upgrade','full_report','post_task_report','unknown') NOT NULL DEFAULT 'unknown'`,
+		`ALTER TABLE reports ADD COLUMN IF NOT EXISTS output LONGTEXT NULL`,
+	}},
+	{5, "Settings, package cache, install_package task", []string{
+		`CREATE TABLE IF NOT EXISTS settings (
+			key_name VARCHAR(100) NOT NULL,
+			value TEXT NULL,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			PRIMARY KEY (key_name)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS package_cache (
+			id INT NOT NULL AUTO_INCREMENT,
+			query VARCHAR(255) NOT NULL,
+			results LONGTEXT NULL,
+			cached_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_query (query)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check') NOT NULL DEFAULT 'check'`,
+		`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS package_version VARCHAR(100) NULL AFTER package_name`,
+		`INSERT IGNORE INTO settings (key_name, value) VALUES
+			('check_interval_minutes',  '1'),
+			('full_scan_interval_hours','24'),
+			('install_service',         'true'),
+			('service_name',            'Corrivex Agent')`,
+	}},
+	{6, "Ping every 1 min, full scan every 24h", []string{
+		`INSERT IGNORE INTO settings (key_name, value) VALUES ('full_scan_interval_hours','24')`,
+		`UPDATE settings SET value='1' WHERE key_name='check_interval_minutes' AND value='60'`,
+	}},
+	{7, "Per-agent token + uninstall_self task", []string{
+		`ALTER TABLE pcs ADD COLUMN IF NOT EXISTS token CHAR(64) NULL`,
+		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self') NOT NULL DEFAULT 'check'`,
+	}},
+	{8, "Users, sessions, roles", []string{
+		`CREATE TABLE IF NOT EXISTS users (
+			id INT NOT NULL AUTO_INCREMENT,
+			username VARCHAR(100) NOT NULL,
+			password_hash VARCHAR(200) NOT NULL,
+			role ENUM('admin','operator','viewer') NOT NULL DEFAULT 'viewer',
+			totp_secret VARCHAR(64) NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			last_login_at DATETIME NULL,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_username (username)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS sessions (
+			id CHAR(64) NOT NULL,
+			user_id INT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			expires_at DATETIME NOT NULL,
+			last_seen_at DATETIME NULL,
+			ip VARCHAR(45) NULL,
+			user_agent VARCHAR(500) NULL,
+			PRIMARY KEY (id),
+			KEY idx_user (user_id),
+			KEY idx_exp (expires_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	}},
+	{9, "Windows Update inventory + task types", []string{
+		`ALTER TABLE pcs ADD COLUMN IF NOT EXISTS windows_updates LONGTEXT NULL`,
+		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single') NOT NULL DEFAULT 'check'`,
+	}},
+}
+
+func (d *DB) Migrate() error {
+	mig := migrations
+	existsQ := "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='schema_version'"
+	if d.driver == DriverSQLite {
+		mig = migrationsSQLite
+		existsQ = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_version'"
+	}
+	var exists int
+	if err := d.sql.QueryRow(existsQ).Scan(&exists); err != nil {
+		return err
+	}
+	var current int
+	if exists > 0 {
+		if err := d.sql.QueryRow("SELECT COALESCE(MAX(version),0) FROM schema_version").Scan(&current); err != nil {
+			return err
+		}
+	}
+	for _, m := range mig {
+		if m.Version <= current {
+			continue
+		}
+		tx, err := d.sql.Begin()
+		if err != nil {
+			return err
+		}
+		for _, stmt := range m.Statements {
+			if _, err := tx.Exec(stmt); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("migration v%d failed: %w", m.Version, err)
+			}
+		}
+		if _, err := tx.Exec("INSERT INTO schema_version (version, description) VALUES (?,?)", m.Version, m.Description); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("record v%d: %w", m.Version, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrationsSQLite mirrors the MariaDB schema using SQLite-friendly DDL.
+// Numbering is kept in lock-step so SchemaVersion() returns the same value
+// regardless of backend.
+var migrationsSQLite = []struct {
+	Version     int
+	Description string
+	Statements  []string
+}{
+	{1, "Initial schema", []string{
+		`CREATE TABLE IF NOT EXISTS schema_version (
+			version INTEGER NOT NULL,
+			applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			description TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE TABLE IF NOT EXISTS pcs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL UNIQUE,
+			last_seen DATETIME,
+			update_count INTEGER NOT NULL DEFAULT -1,
+			last_check_at DATETIME,
+			last_upgrade_at DATETIME
+		)`,
+		`CREATE TABLE IF NOT EXISTS reports (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL,
+			action TEXT NOT NULL DEFAULT 'unknown' CHECK (action IN ('check','upgrade','full_report','post_task_report','unknown')),
+			reported_at DATETIME NOT NULL,
+			username TEXT,
+			ip TEXT,
+			output TEXT,
+			packages TEXT,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_reports_hostname ON reports(hostname)`,
+		`CREATE INDEX IF NOT EXISTS idx_reports_action ON reports(action)`,
+		`CREATE INDEX IF NOT EXISTS idx_reports_host_action ON reports(hostname, action, reported_at)`,
+	}},
+	{2, "Structured packages JSON", []string{
+		// Columns already present from v1 in SQLite; add the per-PC last_packages/last_exported.
+		`ALTER TABLE pcs ADD COLUMN last_packages TEXT`,
+		`ALTER TABLE pcs ADD COLUMN last_exported TEXT`,
+	}},
+	{3, "Domains, tasks, system info", []string{
+		`CREATE TABLE IF NOT EXISTS allowed_domains (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			domain TEXT NOT NULL UNIQUE,
+			notes TEXT,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL,
+			type TEXT NOT NULL DEFAULT 'check' CHECK (type IN ('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single')),
+			package_id TEXT,
+			package_name TEXT,
+			package_version TEXT,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','delivered','completed','failed')),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			delivered_at DATETIME,
+			completed_at DATETIME,
+			result TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_host_status ON tasks(hostname, status)`,
+		`ALTER TABLE pcs ADD COLUMN domain TEXT`,
+		`ALTER TABLE pcs ADD COLUMN os_version TEXT`,
+		`ALTER TABLE pcs ADD COLUMN users TEXT`,
+		`ALTER TABLE pcs ADD COLUMN local_admins TEXT`,
+		`ALTER TABLE pcs ADD COLUMN last_full_report DATETIME`,
+	}},
+	{4, "Fix reports.action ENUM", []string{
+		// In SQLite the v1 CHECK already allowed all variants; nothing to alter.
+		// If `output` is missing on a very old database, this is a no-op given v1 created it.
+	}},
+	{5, "Settings, package cache, install_package task", []string{
+		`CREATE TABLE IF NOT EXISTS settings (
+			key_name TEXT NOT NULL PRIMARY KEY,
+			value TEXT,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS package_cache (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			query TEXT NOT NULL UNIQUE,
+			results TEXT,
+			cached_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('check_interval_minutes','1')`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('full_scan_interval_hours','24')`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('install_service','true')`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('service_name','Corrivex Agent')`,
+	}},
+	{6, "Ping every 1 min, full scan every 24h", []string{
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('full_scan_interval_hours','24')`,
+		`UPDATE settings SET value='1' WHERE key_name='check_interval_minutes' AND value='60'`,
+	}},
+	{7, "Per-agent token + uninstall_self task", []string{
+		`ALTER TABLE pcs ADD COLUMN token TEXT`,
+	}},
+	{8, "Users, sessions, roles", []string{
+		`CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT 'viewer' CHECK (role IN ('admin','operator','viewer')),
+			totp_secret TEXT,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			last_login_at DATETIME
+		)`,
+		`CREATE TABLE IF NOT EXISTS sessions (
+			id TEXT NOT NULL PRIMARY KEY,
+			user_id INTEGER NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			expires_at DATETIME NOT NULL,
+			last_seen_at DATETIME,
+			ip TEXT,
+			user_agent TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_exp ON sessions(expires_at)`,
+	}},
+	{9, "Windows Update inventory + task types", []string{
+		`ALTER TABLE pcs ADD COLUMN windows_updates TEXT`,
+		// The CHECK on tasks.type from v3 already covers windows_update_*.
+	}},
+}
+
+type SchemaVersion struct {
+	Version     int       `json:"version"`
+	AppliedAt   time.Time `json:"applied_at"`
+	Description string    `json:"description"`
+}
+
+func (d *DB) SchemaVersions() ([]SchemaVersion, error) {
+	rows, err := d.sql.Query("SELECT version, applied_at, description FROM schema_version ORDER BY version")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SchemaVersion
+	for rows.Next() {
+		var s SchemaVersion
+		if err := rows.Scan(&s.Version, &s.AppliedAt, &s.Description); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// -- Domains ----------------------------------------------------------------
+
+type Domain struct {
+	ID        int       `json:"id"`
+	Domain    string    `json:"domain"`
+	Notes     *string   `json:"notes"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (d *DB) IsDomainAllowed(domain string) (bool, error) {
+	if !d.cfg.CheckDom {
+		return true, nil
+	}
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		return false, nil
+	}
+	var n int
+	err := d.sql.QueryRow("SELECT COUNT(*) FROM allowed_domains WHERE LOWER(domain)=?", domain).Scan(&n)
+	return n > 0, err
+}
+
+func (d *DB) AllowedDomains() ([]Domain, error) {
+	rows, err := d.sql.Query("SELECT id, domain, notes, created_at FROM allowed_domains ORDER BY domain")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Domain
+	for rows.Next() {
+		var x Domain
+		if err := rows.Scan(&x.ID, &x.Domain, &x.Notes, &x.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) AddAllowedDomain(domain, notes string) error {
+	verb := "INSERT IGNORE"
+	if d.driver == DriverSQLite {
+		verb = "INSERT OR IGNORE"
+	}
+	_, err := d.sql.Exec(verb+" INTO allowed_domains (domain, notes) VALUES (?,?)",
+		strings.ToLower(strings.TrimSpace(domain)), notes)
+	return err
+}
+
+func (d *DB) RemoveAllowedDomain(id int) error {
+	_, err := d.sql.Exec("DELETE FROM allowed_domains WHERE id=?", id)
+	return err
+}
+
+// -- Tasks ------------------------------------------------------------------
+
+type Task struct {
+	ID             int64          `json:"id"`
+	Hostname       string         `json:"hostname"`
+	Type           string         `json:"type"`
+	PackageID      *string        `json:"package_id"`
+	PackageName    *string        `json:"package_name"`
+	PackageVersion *string        `json:"package_version"`
+	Status         string         `json:"status"`
+	CreatedAt      time.Time      `json:"created_at"`
+	DeliveredAt    *time.Time     `json:"delivered_at"`
+	CompletedAt    *time.Time     `json:"completed_at"`
+	Result         *string        `json:"result"`
+}
+
+func (d *DB) CreateTask(hostname, typ string, pkgID, pkgName, pkgVer *string) (int64, error) {
+	if typ == "upgrade_all" {
+		d.sql.Exec(
+			"UPDATE tasks SET status='failed', result='superseded' WHERE hostname=? AND type='upgrade_all' AND status='pending'",
+			hostname)
+	} else if typ == "upgrade_package" && pkgID != nil {
+		d.sql.Exec(
+			"UPDATE tasks SET status='failed', result='superseded' WHERE hostname=? AND type='upgrade_package' AND package_id=? AND status='pending'",
+			hostname, *pkgID)
+	}
+	res, err := d.sql.Exec(
+		"INSERT INTO tasks (hostname, type, package_id, package_name, package_version) VALUES (?,?,?,?,?)",
+		hostname, typ, nullStr(pkgID), nullStr(pkgName), nullStr(pkgVer))
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (d *DB) PendingTasks(hostname string) ([]Task, error) {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(
+		"SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result FROM tasks WHERE hostname=? AND status='pending' ORDER BY created_at",
+		hostname)
+	if err != nil {
+		return nil, err
+	}
+	var out []Task
+	var ids []int64
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.Hostname, &t.Type, &t.PackageID, &t.PackageName, &t.PackageVersion, &t.Status, &t.CreatedAt, &t.DeliveredAt, &t.CompletedAt, &t.Result); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, t)
+		ids = append(ids, t.ID)
+	}
+	rows.Close()
+	if len(ids) > 0 {
+		placeholders := strings.Repeat("?,", len(ids))
+		placeholders = placeholders[:len(placeholders)-1]
+		args := make([]any, len(ids))
+		for i, id := range ids {
+			args[i] = id
+		}
+		if _, err := tx.Exec("UPDATE tasks SET status='delivered', delivered_at=CURRENT_TIMESTAMP WHERE id IN ("+placeholders+")", args...); err != nil {
+			return nil, err
+		}
+	}
+	return out, tx.Commit()
+}
+
+func (d *DB) CompleteTask(id int64, result string) error {
+	_, err := d.sql.Exec("UPDATE tasks SET status='completed', completed_at=CURRENT_TIMESTAMP, result=? WHERE id=?", result, id)
+	return err
+}
+
+// MarkTaskDelivered is used when the server pushes a task straight to a live
+// agent via the persistent WS connection, so the dashboard does not need to
+// wait for the next poll to see the 'delivered' transition.
+func (d *DB) MarkTaskDelivered(id int64) error {
+	_, err := d.sql.Exec("UPDATE tasks SET status='delivered', delivered_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'", id)
+	return err
+}
+
+func (d *DB) TasksForHost(hostname string, limit int) ([]Task, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	rows, err := d.sql.Query(
+		"SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result FROM tasks WHERE hostname=? ORDER BY created_at DESC LIMIT ?",
+		hostname, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Task
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.Hostname, &t.Type, &t.PackageID, &t.PackageName, &t.PackageVersion, &t.Status, &t.CreatedAt, &t.DeliveredAt, &t.CompletedAt, &t.Result); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// -- Reports ----------------------------------------------------------------
+
+type FullReport struct {
+	Hostname       string           `json:"hostname"`
+	Host           string           `json:"host"`
+	Action         string           `json:"action"`
+	Timestamp      string           `json:"timestamp"`
+	Username       string           `json:"username"`
+	User           string           `json:"user"`
+	Domain         string           `json:"domain"`
+	OSVersion      string           `json:"os_version"`
+	Users          []map[string]any `json:"users"`
+	LocalAdmins    []map[string]any `json:"local_admins"`
+	Packages       []map[string]any `json:"packages"`
+	WindowsUpdates []map[string]any `json:"windows_updates"`
+	UpdateCount    *int             `json:"update_count"`
+	AgentLog       string           `json:"agent_log"`
+}
+
+func (d *DB) StoreFullReport(r FullReport, clientIP string) ([]Task, error) {
+	host := r.Hostname
+	if host == "" {
+		host = r.Host
+	}
+	hostname := d.NormalizeHost(host)
+	if hostname == "" {
+		return nil, fmt.Errorf("missing hostname")
+	}
+	action := r.Action
+	if action == "" {
+		action = "full_report"
+	}
+	user := r.Username
+	if user == "" {
+		user = r.User
+	}
+	domain := strings.ToLower(strings.TrimSpace(r.Domain))
+
+	var packagesJSON, usersJSON, adminsJSON, windowsJSON *string
+	if r.Packages != nil {
+		b, _ := json.Marshal(r.Packages)
+		s := string(b)
+		packagesJSON = &s
+	}
+	if r.Users != nil {
+		b, _ := json.Marshal(r.Users)
+		s := string(b)
+		usersJSON = &s
+	}
+	if r.LocalAdmins != nil {
+		b, _ := json.Marshal(r.LocalAdmins)
+		s := string(b)
+		adminsJSON = &s
+	}
+	if r.WindowsUpdates != nil {
+		b, _ := json.Marshal(r.WindowsUpdates)
+		s := string(b)
+		windowsJSON = &s
+	}
+	updateCount := -1
+	if r.Packages != nil {
+		updateCount = len(r.Packages)
+	} else if r.UpdateCount != nil {
+		updateCount = *r.UpdateCount
+	}
+
+	if _, err := d.sql.Exec(
+		"INSERT INTO reports (hostname, action, reported_at, username, ip, packages, output) VALUES (?,?,CURRENT_TIMESTAMP,?,?,?,?)",
+		hostname, action, nullIfEmpty(user), nullIfEmpty(clientIP), packagesJSON, nullIfEmpty(r.AgentLog),
+	); err != nil {
+		return nil, err
+	}
+
+	isFull := "0"
+	if action == "full_report" {
+		isFull = "1"
+	}
+	var upsertSQL string
+	if d.driver == DriverSQLite {
+		upsertSQL = `
+		INSERT INTO pcs (hostname, domain, os_version, last_seen, update_count, last_check_at, last_packages, users, local_admins, windows_updates, last_full_report)
+		VALUES (?,?,?,CURRENT_TIMESTAMP,?,CURRENT_TIMESTAMP,?,?,?,?, CASE WHEN ?='1' THEN CURRENT_TIMESTAMP ELSE NULL END)
+		ON CONFLICT(hostname) DO UPDATE SET
+			domain           = COALESCE(excluded.domain, pcs.domain),
+			os_version       = COALESCE(excluded.os_version, pcs.os_version),
+			last_seen        = CURRENT_TIMESTAMP,
+			update_count     = CASE WHEN excluded.update_count>=0 THEN excluded.update_count ELSE pcs.update_count END,
+			last_check_at    = CASE WHEN excluded.update_count>=0 THEN CURRENT_TIMESTAMP ELSE pcs.last_check_at END,
+			last_packages    = COALESCE(excluded.last_packages, pcs.last_packages),
+			users            = COALESCE(excluded.users, pcs.users),
+			local_admins     = COALESCE(excluded.local_admins, pcs.local_admins),
+			windows_updates  = COALESCE(excluded.windows_updates, pcs.windows_updates),
+			last_full_report = CASE WHEN ?='1' THEN CURRENT_TIMESTAMP ELSE pcs.last_full_report END`
+	} else {
+		upsertSQL = `
+		INSERT INTO pcs (hostname, domain, os_version, last_seen, update_count, last_check_at, last_packages, users, local_admins, windows_updates, last_full_report)
+		VALUES (?,?,?,CURRENT_TIMESTAMP,?,CURRENT_TIMESTAMP,?,?,?,?, IF(?='1', CURRENT_TIMESTAMP, NULL))
+		ON DUPLICATE KEY UPDATE
+			domain           = COALESCE(VALUES(domain), domain),
+			os_version       = COALESCE(VALUES(os_version), os_version),
+			last_seen        = CURRENT_TIMESTAMP,
+			update_count     = IF(VALUES(update_count)>=0, VALUES(update_count), update_count),
+			last_check_at    = IF(VALUES(update_count)>=0, CURRENT_TIMESTAMP, last_check_at),
+			last_packages    = COALESCE(VALUES(last_packages), last_packages),
+			users            = COALESCE(VALUES(users), users),
+			local_admins     = COALESCE(VALUES(local_admins), local_admins),
+			windows_updates  = COALESCE(VALUES(windows_updates), windows_updates),
+			last_full_report = IF(?='1', CURRENT_TIMESTAMP, last_full_report)`
+	}
+	if _, err := d.sql.Exec(upsertSQL,
+		hostname, nullIfEmpty(domain), nullIfEmpty(r.OSVersion), updateCount,
+		packagesJSON, usersJSON, adminsJSON, windowsJSON, isFull, isFull,
+	); err != nil {
+		return nil, err
+	}
+
+	d.pruneReports(hostname, action)
+	return d.PendingTasks(hostname)
+}
+
+func (d *DB) pruneReports(hostname, action string) {
+	keep := d.cfg.Keep
+	if keep <= 0 {
+		keep = 50
+	}
+	d.sql.Exec(`
+		DELETE FROM reports WHERE hostname=? AND action=?
+		AND id NOT IN (SELECT id FROM (
+			SELECT id FROM reports WHERE hostname=? AND action=? ORDER BY reported_at DESC LIMIT ?
+		) sub)`,
+		hostname, action, hostname, action, keep)
+}
+
+// -- PC queries -------------------------------------------------------------
+
+type PC struct {
+	ID             int             `json:"id"`
+	Hostname       string          `json:"hostname"`
+	Domain         *string         `json:"domain"`
+	OSVersion      *string         `json:"os_version"`
+	LastSeen       *time.Time      `json:"last_seen"`
+	UpdateCount    int             `json:"update_count"`
+	LastCheckAt    *time.Time      `json:"last_check_at"`
+	LastUpgradeAt  *time.Time      `json:"last_upgrade_at"`
+	LastFullReport *time.Time      `json:"last_full_report"`
+	LastPackages   json.RawMessage `json:"last_packages,omitempty"`
+	WindowsUpdates json.RawMessage `json:"windows_updates,omitempty"`
+	Users          json.RawMessage `json:"users,omitempty"`
+	LocalAdmins    json.RawMessage `json:"local_admins,omitempty"`
+	CheckAt        *time.Time      `json:"check_at,omitempty"`
+	CheckUser      *string         `json:"check_user,omitempty"`
+	CheckIP        *string         `json:"check_ip,omitempty"`
+	UpgradeAt      *time.Time      `json:"upgrade_at,omitempty"`
+	UpgradeUser    *string         `json:"upgrade_user,omitempty"`
+	Tasks          []Task          `json:"tasks,omitempty"`
+	// Online is not persisted — the API/web layer fills it based on whether
+	// the host currently has a live agent WebSocket connection.
+	Online bool `json:"online"`
+}
+
+// WindowsUpdateCount parses the stored windows_updates JSON and returns the
+// number of pending updates. Returns -1 when no scan has been recorded yet
+// so the dashboard can render "unknown" instead of "0".
+func (p PC) WindowsUpdateCount() int {
+	raw := string(p.WindowsUpdates)
+	if raw == "" || raw == "null" {
+		return -1
+	}
+	var arr []json.RawMessage
+	if err := json.Unmarshal(p.WindowsUpdates, &arr); err != nil {
+		return -1
+	}
+	return len(arr)
+}
+
+func (d *DB) AllPCs(filterDomain string) ([]PC, error) {
+	q := `
+		SELECT p.id, p.hostname, p.domain, p.os_version, p.last_seen, p.update_count,
+			p.last_check_at, p.last_upgrade_at, p.last_full_report, p.last_packages, p.users, p.local_admins,
+			p.windows_updates,
+			rc.reported_at, rc.username, rc.ip,
+			ru.reported_at, ru.username
+		FROM pcs p
+		LEFT JOIN reports rc ON rc.id=(SELECT id FROM reports WHERE hostname=p.hostname AND action IN('full_report','check','post_task_report') ORDER BY reported_at DESC LIMIT 1)
+		LEFT JOIN reports ru ON ru.id=(SELECT id FROM reports WHERE hostname=p.hostname AND action IN('upgrade_all','upgrade_package') ORDER BY reported_at DESC LIMIT 1)`
+	args := []any{}
+	if filterDomain != "" {
+		q += " WHERE LOWER(p.domain)=?"
+		args = append(args, strings.ToLower(filterDomain))
+	}
+	q += " ORDER BY p.last_seen DESC"
+	rows, err := d.sql.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PC
+	for rows.Next() {
+		var p PC
+		var pkgs, users, admins, wu sql.NullString
+		if err := rows.Scan(&p.ID, &p.Hostname, &p.Domain, &p.OSVersion, &p.LastSeen, &p.UpdateCount,
+			&p.LastCheckAt, &p.LastUpgradeAt, &p.LastFullReport, &pkgs, &users, &admins, &wu,
+			&p.CheckAt, &p.CheckUser, &p.CheckIP,
+			&p.UpgradeAt, &p.UpgradeUser); err != nil {
+			return nil, err
+		}
+		if pkgs.Valid {
+			p.LastPackages = json.RawMessage(pkgs.String)
+		}
+		if users.Valid {
+			p.Users = json.RawMessage(users.String)
+		}
+		if admins.Valid {
+			p.LocalAdmins = json.RawMessage(admins.String)
+		}
+		if wu.Valid {
+			p.WindowsUpdates = json.RawMessage(wu.String)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) GetPC(hostname string) (*PC, error) {
+	hostname = d.NormalizeHost(hostname)
+	row := d.sql.QueryRow(
+		"SELECT id, hostname, domain, os_version, last_seen, update_count, last_check_at, last_upgrade_at, last_full_report, last_packages, users, local_admins, windows_updates FROM pcs WHERE hostname=?",
+		hostname)
+	var p PC
+	var pkgs, users, admins, wu sql.NullString
+	if err := row.Scan(&p.ID, &p.Hostname, &p.Domain, &p.OSVersion, &p.LastSeen, &p.UpdateCount,
+		&p.LastCheckAt, &p.LastUpgradeAt, &p.LastFullReport, &pkgs, &users, &admins, &wu); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if pkgs.Valid {
+		p.LastPackages = json.RawMessage(pkgs.String)
+	}
+	if users.Valid {
+		p.Users = json.RawMessage(users.String)
+	}
+	if admins.Valid {
+		p.LocalAdmins = json.RawMessage(admins.String)
+	}
+	if wu.Valid {
+		p.WindowsUpdates = json.RawMessage(wu.String)
+	}
+	tasks, err := d.TasksForHost(hostname, 30)
+	if err != nil {
+		return nil, err
+	}
+	p.Tasks = tasks
+	return &p, nil
+}
+
+func (d *DB) TouchLastSeen(hostname string) error {
+	q := "INSERT INTO pcs (hostname, last_seen) VALUES (?, CURRENT_TIMESTAMP) ON DUPLICATE KEY UPDATE last_seen=CURRENT_TIMESTAMP"
+	if d.driver == DriverSQLite {
+		q = "INSERT INTO pcs (hostname, last_seen) VALUES (?, CURRENT_TIMESTAMP) ON CONFLICT(hostname) DO UPDATE SET last_seen=CURRENT_TIMESTAMP"
+	}
+	_, err := d.sql.Exec(q, hostname)
+	return err
+}
+
+// GetAgentToken returns the stored per-agent token for a hostname, or ""
+// if none is set (including when the pcs row does not exist yet).
+func (d *DB) GetAgentToken(hostname string) (string, error) {
+	var t sql.NullString
+	err := d.sql.QueryRow("SELECT token FROM pcs WHERE hostname=?", hostname).Scan(&t)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !t.Valid {
+		return "", nil
+	}
+	return t.String, nil
+}
+
+// SetAgentToken upserts the token for a hostname (creates the pcs row if needed).
+func (d *DB) SetAgentToken(hostname, token string) error {
+	q := "INSERT INTO pcs (hostname, token, last_seen) VALUES (?,?,CURRENT_TIMESTAMP) ON DUPLICATE KEY UPDATE token=VALUES(token)"
+	if d.driver == DriverSQLite {
+		q = "INSERT INTO pcs (hostname, token, last_seen) VALUES (?,?,CURRENT_TIMESTAMP) ON CONFLICT(hostname) DO UPDATE SET token=excluded.token"
+	}
+	_, err := d.sql.Exec(q, hostname, token)
+	return err
+}
+
+// DeletePC hard-removes a host and all its related tasks/reports.
+func (d *DB) DeletePC(hostname string) error {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		"DELETE FROM tasks WHERE hostname=?",
+		"DELETE FROM reports WHERE hostname=?",
+		"DELETE FROM pcs WHERE hostname=?",
+	} {
+		if _, err := tx.Exec(stmt, hostname); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetTask fetches one task by id.
+func (d *DB) GetTask(id int64) (*Task, error) {
+	row := d.sql.QueryRow(
+		"SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result FROM tasks WHERE id=?",
+		id)
+	var t Task
+	if err := row.Scan(&t.ID, &t.Hostname, &t.Type, &t.PackageID, &t.PackageName, &t.PackageVersion, &t.Status, &t.CreatedAt, &t.DeliveredAt, &t.CompletedAt, &t.Result); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &t, nil
+}
+
+// -- Settings ---------------------------------------------------------------
+
+func (d *DB) Setting(key, def string) string {
+	var v sql.NullString
+	if err := d.sql.QueryRow("SELECT value FROM settings WHERE key_name=?", key).Scan(&v); err != nil {
+		return def
+	}
+	if !v.Valid {
+		return def
+	}
+	return v.String
+}
+
+func (d *DB) SetSetting(key, val string) error {
+	q := "INSERT INTO settings (key_name, value) VALUES (?,?) ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=CURRENT_TIMESTAMP"
+	if d.driver == DriverSQLite {
+		q = "INSERT INTO settings (key_name, value) VALUES (?,?) ON CONFLICT(key_name) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP"
+	}
+	_, err := d.sql.Exec(q, key, val)
+	return err
+}
+
+func (d *DB) AllSettings() (map[string]string, error) {
+	rows, err := d.sql.Query("SELECT key_name, value FROM settings")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k string
+		var v sql.NullString
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		if v.Valid {
+			out[k] = v.String
+		} else {
+			out[k] = ""
+		}
+	}
+	return out, rows.Err()
+}
+
+// -- Package cache ----------------------------------------------------------
+
+func (d *DB) PackageCacheGet(query string) (json.RawMessage, bool) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	var results sql.NullString
+	var cachedAt time.Time
+	if err := d.sql.QueryRow("SELECT results, cached_at FROM package_cache WHERE query=?", q).
+		Scan(&results, &cachedAt); err != nil {
+		return nil, false
+	}
+	if time.Since(cachedAt) > 24*time.Hour {
+		return nil, false
+	}
+	if !results.Valid {
+		return nil, false
+	}
+	return json.RawMessage(results.String), true
+}
+
+func (d *DB) PackageCacheSet(query string, results []byte) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	stmt := "INSERT INTO package_cache (query, results) VALUES (?,?) ON DUPLICATE KEY UPDATE results=VALUES(results), cached_at=CURRENT_TIMESTAMP"
+	if d.driver == DriverSQLite {
+		stmt = "INSERT INTO package_cache (query, results) VALUES (?,?) ON CONFLICT(query) DO UPDATE SET results=excluded.results, cached_at=CURRENT_TIMESTAMP"
+	}
+	d.sql.Exec(stmt, q, string(results))
+}
+
+// -- Users ------------------------------------------------------------------
+
+type User struct {
+	ID           int        `json:"id"`
+	Username     string     `json:"username"`
+	PasswordHash string     `json:"-"`
+	Role         string     `json:"role"`
+	TOTPSecret   *string    `json:"-"`
+	TOTPEnabled  bool       `json:"totp_enabled"`
+	CreatedAt    time.Time  `json:"created_at"`
+	LastLoginAt  *time.Time `json:"last_login_at"`
+}
+
+func (d *DB) CountUsers() (int, error) {
+	var n int
+	err := d.sql.QueryRow("SELECT COUNT(*) FROM users").Scan(&n)
+	return n, err
+}
+
+func (d *DB) CreateUser(username, passwordHash, role string) (int64, error) {
+	res, err := d.sql.Exec(
+		"INSERT INTO users (username, password_hash, role) VALUES (?,?,?)",
+		username, passwordHash, role)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (d *DB) GetUserByID(id int) (*User, error) {
+	row := d.sql.QueryRow(
+		"SELECT id, username, password_hash, role, totp_secret, created_at, last_login_at FROM users WHERE id=?", id)
+	return scanUser(row)
+}
+
+func (d *DB) GetUserByName(username string) (*User, error) {
+	row := d.sql.QueryRow(
+		"SELECT id, username, password_hash, role, totp_secret, created_at, last_login_at FROM users WHERE username=?", username)
+	return scanUser(row)
+}
+
+func scanUser(row *sql.Row) (*User, error) {
+	var u User
+	var totp sql.NullString
+	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &totp, &u.CreatedAt, &u.LastLoginAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if totp.Valid && totp.String != "" {
+		s := totp.String
+		u.TOTPSecret = &s
+		u.TOTPEnabled = true
+	}
+	return &u, nil
+}
+
+func (d *DB) ListUsers() ([]User, error) {
+	rows, err := d.sql.Query(
+		"SELECT id, username, password_hash, role, totp_secret, created_at, last_login_at FROM users ORDER BY username")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []User
+	for rows.Next() {
+		var u User
+		var totp sql.NullString
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &totp, &u.CreatedAt, &u.LastLoginAt); err != nil {
+			return nil, err
+		}
+		if totp.Valid && totp.String != "" {
+			s := totp.String
+			u.TOTPSecret = &s
+			u.TOTPEnabled = true
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) UpdateUserPassword(id int, passwordHash string) error {
+	_, err := d.sql.Exec("UPDATE users SET password_hash=? WHERE id=?", passwordHash, id)
+	return err
+}
+
+func (d *DB) UpdateUserRole(id int, role string) error {
+	_, err := d.sql.Exec("UPDATE users SET role=? WHERE id=?", role, id)
+	return err
+}
+
+func (d *DB) SetUserTOTPSecret(id int, secret *string) error {
+	_, err := d.sql.Exec("UPDATE users SET totp_secret=? WHERE id=?", secret, id)
+	return err
+}
+
+func (d *DB) DeleteUser(id int) error {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM sessions WHERE user_id=?", id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM users WHERE id=?", id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (d *DB) TouchUserLogin(id int) error {
+	_, err := d.sql.Exec("UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?", id)
+	return err
+}
+
+// -- Sessions ---------------------------------------------------------------
+
+type Session struct {
+	ID        string
+	UserID    int
+	ExpiresAt time.Time
+}
+
+func (d *DB) CreateSession(id string, userID int, expires time.Time, ip, ua string) error {
+	_, err := d.sql.Exec(
+		"INSERT INTO sessions (id, user_id, expires_at, last_seen_at, ip, user_agent) VALUES (?,?,?,CURRENT_TIMESTAMP,?,?)",
+		id, userID, expires, nullIfEmpty(ip), nullIfEmpty(ua))
+	return err
+}
+
+// LookupSession returns the session + associated user if the session is
+// present and not expired. A nil User means no valid session.
+//
+// Implementation note: we do the expiry check in Go instead of SQL so we
+// don't have to worry about time-format differences between MariaDB
+// (DATETIME) and SQLite (which stores time.Time using whatever the driver
+// chose — the lexical comparison against CURRENT_TIMESTAMP is fragile).
+func (d *DB) LookupSession(id string) (*Session, *User, error) {
+	row := d.sql.QueryRow(
+		`SELECT s.id, s.user_id, s.expires_at,
+			u.id, u.username, u.password_hash, u.role, u.totp_secret, u.created_at, u.last_login_at
+		 FROM sessions s INNER JOIN users u ON u.id=s.user_id
+		 WHERE s.id=?`, id)
+	var s Session
+	var u User
+	var totp sql.NullString
+	if err := row.Scan(&s.ID, &s.UserID, &s.ExpiresAt,
+		&u.ID, &u.Username, &u.PasswordHash, &u.Role, &totp, &u.CreatedAt, &u.LastLoginAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+	if !s.ExpiresAt.IsZero() && time.Now().After(s.ExpiresAt) {
+		return nil, nil, nil
+	}
+	if totp.Valid && totp.String != "" {
+		x := totp.String
+		u.TOTPSecret = &x
+		u.TOTPEnabled = true
+	}
+	// update last_seen_at opportunistically; ignore errors
+	d.sql.Exec("UPDATE sessions SET last_seen_at=CURRENT_TIMESTAMP WHERE id=?", id)
+	return &s, &u, nil
+}
+
+func (d *DB) DeleteSession(id string) error {
+	_, err := d.sql.Exec("DELETE FROM sessions WHERE id=?", id)
+	return err
+}
+
+func (d *DB) PurgeExpiredSessions() error {
+	_, err := d.sql.Exec("DELETE FROM sessions WHERE expires_at < CURRENT_TIMESTAMP")
+	return err
+}
+
+// -- helpers ----------------------------------------------------------------
+
+func nullStr(s *string) any {
+	if s == nil || *s == "" {
+		return nil
+	}
+	return *s
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
