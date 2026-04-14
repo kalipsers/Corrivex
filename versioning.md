@@ -55,6 +55,24 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.1.1 — CI / Release pipeline
+
+**Patch** — internal infrastructure, no runtime change.
+
+- `.github/workflows/ci.yml` — vet + test + cross-compile sanity build on
+  every push and PR to `main`.
+- `.github/workflows/release.yml` — on a `vX.Y.Z` tag, builds all binaries
+  with the version embedded, packages the Windows release zip, computes
+  SHA256 sums, creates a GitHub Release with the matching changelog
+  section as the body, and pushes a Docker image to Docker Hub
+  (`<DOCKERHUB_USERNAME>/corrivex:X.Y.Z` and `:latest`).
+- `scripts/bump-version.sh` — one-shot helper that bumps SemVer in
+  lock-step across `internal/version/version.go`, both `versioninfo.json`
+  files, and inserts a stub in `versioning.md`. Falls back to `python` if
+  `python3` isn't on PATH.
+- README — new "CI / Release pipeline" section documenting required
+  GitHub repo secrets (`DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`).
+
 ### 1.1.0 — QR code for TOTP setup
 
 **Minor**

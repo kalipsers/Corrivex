@@ -1,0 +1,63 @@
+name: CI
+
+# Runs on every push and PR to main. Sanity-builds the linux server, the
+# windows server, and the windows agent. Does NOT publish anything.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: vet + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - name: go mod tidy (verify clean)
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - run: go vet ./...
+      - run: go test ./...
+
+  build:
+    name: cross-compile sanity (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: server-linux
+            goos: linux
+            goarch: amd64
+            pkg: ./cmd/server
+          - target: server-windows
+            goos: windows
+            goarch: amd64
+            pkg: ./cmd/server
+          - target: agent-windows
+            goos: windows
+            goarch: amd64
+            pkg: ./cmd/agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - name: build ${{ matrix.target }}
+        env:
+          GOOS:   ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          VERSION=$(awk -F'"' '/^var Version =/{print $2; exit}' internal/version/version.go)
+          go build -trimpath \
+            -ldflags="-s -w -X github.com/markov/corrivex/internal/version.Version=${VERSION}" \
+            ${{ matrix.pkg }}

@@ -269,6 +269,45 @@ GOOS=windows GOARCH=amd64 go build -o bin/corrivex-agent.exe  ./cmd/agent
 The Linux Docker image is built by `docker compose build` — no Go toolchain
 needed on the host, the multi-stage `Dockerfile` builds inside `golang:alpine`.
 
+## CI / Release pipeline (GitHub Actions)
+
+Two workflows live in `.github/workflows/`:
+
+- **`ci.yml`** — runs on every push and PR to `main`. Vets, tests, and
+  cross-compiles all three binary targets. Does not publish anything.
+- **`release.yml`** — runs when you push a `vX.Y.Z` tag. Builds all
+  binaries (with the version embedded), packages the Windows zip,
+  generates SHA256 checksums, creates a GitHub Release with the
+  changelog section auto-extracted from `versioning.md`, and pushes a
+  multi-tag Docker image (`X.Y.Z` and `latest`) to Docker Hub.
+
+### Required GitHub repo secrets
+
+| Setting | Where | Value |
+|---|---|---|
+| `DOCKERHUB_USERNAME` | Settings → Secrets and variables → Actions → **Secrets** | Docker Hub account that owns the image repo |
+| `DOCKERHUB_TOKEN`    | same as above | Docker Hub access token (https://hub.docker.com/settings/security) — *not* your password |
+| `DOCKERHUB_REPO`     | Settings → Secrets and variables → Actions → **Variables** *(optional)* | Override the image repo name; defaults to `<DOCKERHUB_USERNAME>/corrivex` |
+
+### Cutting a release
+
+```sh
+./scripts/bump-version.sh 1.2.3   # updates version.go + both versioninfo.json + changelog stub
+$EDITOR versioning.md             # replace the TODO stub with the real entry
+git add -A
+git commit -m "release 1.2.3"
+git push origin main
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+The release workflow validates that the tag matches `internal/version/version.go`
+(catches the "forgot to bump" mistake), then builds and publishes everything.
+
+Track progress in the **Actions** tab of the GitHub repo. The release lands at
+`https://github.com/<owner>/Corrivex/releases/tag/v1.2.3`, the image at
+`<DOCKERHUB_USERNAME>/corrivex:1.2.3` (and `:latest`).
+
 ## How it talks to itself (wire protocol)
 
 Per-agent persistent WebSocket on `/api/?action=agent_ws`. Frames are JSON
