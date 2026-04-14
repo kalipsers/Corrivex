@@ -1804,8 +1804,15 @@ async function totpBegin() {
     const j = await res.json();
     if (!res.ok || j.error) throw new Error(j.error || 'HTTP ' + res.status);
     const box = document.getElementById('totp-state');
+    const qrBlock = j.qr_png
+      ? '<div style="display:flex;justify-content:center;margin:10px 0">' +
+          '<img src="' + j.qr_png + '" alt="Scan with your authenticator app" ' +
+              'style="width:208px;height:208px;border:1px solid var(--c-border);border-radius:var(--r-md);background:#fff;padding:6px">' +
+        '</div>'
+      : '';
     box.innerHTML = '<div class="totp-box">' +
-      '<div>Open your authenticator app and add a new account. Paste this URL, <strong>or</strong> type the secret manually:</div>' +
+      '<div>Scan the QR with your authenticator app, or paste the URL / type the secret manually.</div>' +
+      qrBlock +
       '<div style="margin-top:10px"><span class="totp-secret" id="totp-secret">' + escapeHTML(j.secret) + '</span></div>' +
       '<div class="mono" style="font-size:11px;color:var(--c-muted);word-break:break-all;margin-top:6px">' + escapeHTML(j.otpauth_url) + '</div>' +
       '<div class="field" style="margin-top:12px"><label>Enter the current 6-digit code</label><input type="text" id="totp-verify" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000"></div>' +

@@ -1408,15 +1408,20 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, user *db
 
 func (s *Server) totpBegin(w http.ResponseWriter, r *http.Request, user *db.User) {
 	secret := auth.NewSecret()
+	otpURL := auth.OTPAuthURL("Corrivex", user.Username, secret)
 	// Store but do not enable: the TOTPEnabled view is computed from the
 	// column non-null, so we only write it once the user verifies their
 	// first code. For a pending secret we just return it.
-	writeJSON(w, 200, map[string]any{
-		"secret":       secret,
-		"otpauth_url":  auth.OTPAuthURL("Corrivex", user.Username, secret),
-		"issuer":       "Corrivex",
-		"account":      user.Username,
-	})
+	resp := map[string]any{
+		"secret":      secret,
+		"otpauth_url": otpURL,
+		"issuer":      "Corrivex",
+		"account":     user.Username,
+	}
+	if dataURL, err := auth.QRDataURL(otpURL, 8, 2); err == nil {
+		resp["qr_png"] = dataURL
+	}
+	writeJSON(w, 200, resp)
 }
 
 func (s *Server) totpEnable(w http.ResponseWriter, r *http.Request, user *db.User) {

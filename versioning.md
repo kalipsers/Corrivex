@@ -55,6 +55,14 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.1.0 — QR code for TOTP setup
+
+**Minor**
+- Profile → "Enable 2FA" now shows a scannable QR code alongside the secret
+  and the otpauth URL. QR is rendered server-side (pure-Go `rsc.io/qr`) and
+  delivered as an inline data URL — no CDN, no external image fetch, works
+  offline.
+
 ### 1.0.0 — initial release
 
 First tagged release. Establishes the baseline:
