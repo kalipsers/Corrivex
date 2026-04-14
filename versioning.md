@@ -55,6 +55,29 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.2.1 — Pull-from-Hub deployments + Docker Hub Overview
+
+**Patch** — packaging only, no runtime change.
+
+- `docker-compose.yml` now references the published image
+  `kalipserproit/corrivex:latest` (override with `CORRIVEX_IMAGE=...`) and
+  uses `pull_policy: always`. No more local `docker compose build` on the
+  deployment host — Docker just pulls the released image.
+- New `docker-compose.build.yml` for development / air-gapped boxes — same
+  project name + same volume, but builds the image locally from `Dockerfile`.
+- `deploy/deploy.sh` rewritten around the pull-first flow: it now ships
+  only `docker-compose.yml` + `.env.example` to the remote host (instead of
+  the full source tree), seeds `.env`, then runs `docker compose pull && up -d`.
+  Set `CORRIVEX_IMAGE` to pin a specific version.
+- `DOCKERHUB.md` — repo-overview Markdown for the Docker Hub image page,
+  containing the quickstart compose snippet, env-var reference, image-tag
+  meanings, and the architecture diagram.
+- `release.yml` adds a `peter-evans/dockerhub-description` step that
+  publishes `DOCKERHUB.md` to the Docker Hub repo's Overview tab on every
+  tag. Requires the Docker Hub token to have **Read, Write & Delete** scope.
+- README quickstart rewritten to walk through the pull-first flow + the
+  build-from-source escape hatch.
+
 ### 1.2.0 — Wildcard domain whitelist
 
 **Minor**

@@ -1,18 +1,22 @@
 name: corrivex
 
-# Production compose. Pulls the published Corrivex image from Docker Hub —
-# no Go toolchain or source tree required on the host beyond this file.
+# Development compose. Builds the Corrivex image locally from source instead
+# of pulling the published one. Same project name (`corrivex`) and same
+# volume (`corrivex_db`) as docker-compose.yml so you can switch between
+# pull and build without losing data.
 #
-# Quickstart:
-#   1. cp .env.example .env  (and fill in the credentials)
-#   2. docker compose pull
-#   3. docker compose up -d
+# Use this when:
+#   - iterating on the server code
+#   - testing unreleased changes before tagging
+#   - running on an air-gapped host with no Docker Hub access
 #
-# Pin to a specific version with the CORRIVEX_IMAGE override, e.g.:
-#   CORRIVEX_IMAGE=kalipserproit/corrivex:1.2.0 docker compose up -d
+# Build + run:
+#   docker compose -f docker-compose.build.yml up -d --build
 #
-# To build the image from source instead (development), use
-# docker-compose.build.yml.
+# Switch back to the published image:
+#   docker compose -f docker-compose.build.yml down
+#   docker compose pull
+#   docker compose up -d
 
 services:
   db:
@@ -32,9 +36,11 @@ services:
       retries: 12
 
   server:
-    image: ${CORRIVEX_IMAGE:-kalipserproit/corrivex:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: corrivex-server:dev
     restart: unless-stopped
-    pull_policy: always
     depends_on:
       db:
         condition: service_healthy

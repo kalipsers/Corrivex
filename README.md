@@ -78,14 +78,18 @@ real-time dashboard, role-based admin UI, and a single-binary agent.
 
 ## Quickstart — Linux + Docker + MariaDB
 
-The recommended deployment for fleets.
+The recommended deployment for fleets. The server runs from the
+**published Docker Hub image** (`kalipserproit/corrivex`) — no Go toolchain
+or source checkout needed on the host, just Docker + Compose plugin.
 
 ```sh
-# Clone, then on the target Docker host:
 mkdir -p /opt/corrivex && cd /opt/corrivex
 
-# (a) drop the source tree here
-# (b) create .env  (random creds)
+# 1. Drop in the two compose-side files from the repo.
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/kalipsers/Corrivex/main/docker-compose.yml
+curl -fsSLo .env.example       https://raw.githubusercontent.com/kalipsers/Corrivex/main/.env.example
+
+# 2. Create .env with random credentials.
 PASS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 32)
 ROOT=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 32)
 cat > .env <<EOF
@@ -96,17 +100,45 @@ DB_ROOT_PASS=$ROOT
 API_SECRET=
 EOF
 
-# (c) build + run
-docker compose build
+# 3. Pull and start.
+docker compose pull
 docker compose up -d
 ```
 
-Browse `http://your-host:8484/`. The first visit redirects to the **Create
-first admin** form. Create the admin, then go to **Allowed domains** and add
-your AD domain(s). Show **Enroll device** to get the bootstrap one-liner.
+Browse `http://your-host:8484/`. First visit redirects to the **Create first
+admin** form. Create the admin, then go to **Allowed domains** and add your
+AD domain (or enter `*` to permit any). Then **Enroll device** for the
+bootstrap one-liner.
 
-`deploy/deploy.sh root@HOST` is a wrapper that rsyncs the source, creates
-`.env` if missing, builds, and brings the stack up.
+To pin a specific Corrivex version, set `CORRIVEX_IMAGE` before `up`:
+```sh
+CORRIVEX_IMAGE=kalipserproit/corrivex:1.2.0 docker compose up -d
+```
+
+To upgrade later:
+```sh
+docker compose pull && docker compose up -d
+```
+
+`deploy/deploy.sh root@HOST` is a wrapper that pushes `docker-compose.yml` +
+`.env.example` to a remote box, generates a random `.env` on the first run,
+pulls the image, and brings the stack up — all in one command.
+
+### Building from source instead
+
+When iterating on the server code (or running on an air-gapped box that
+can't reach Docker Hub), use `docker-compose.build.yml` — same project
+name, same volume, but builds the image locally from the current source:
+
+```sh
+docker compose -f docker-compose.build.yml up -d --build
+```
+
+To switch back to the published image:
+```sh
+docker compose -f docker-compose.build.yml down
+docker compose pull && docker compose up -d
+```
 
 ## Quickstart — Windows-native + SQLite
 
@@ -286,7 +318,7 @@ Two workflows live in `.github/workflows/`:
 | Setting | Where | Value |
 |---|---|---|
 | `DOCKERHUB_USERNAME` | Settings → Secrets and variables → Actions → **Secrets** | Docker Hub account that owns the image repo |
-| `DOCKERHUB_TOKEN`    | same as above | Docker Hub access token (https://hub.docker.com/settings/security) — *not* your password |
+| `DOCKERHUB_TOKEN`    | same as above | Docker Hub access token (https://hub.docker.com/settings/security) — *not* your password. Needs scope **Read, Write & Delete** so the workflow can update the repo's Overview tab from `DOCKERHUB.md`. (Read-Write also works; Read-Only does not.) |
 | `DOCKERHUB_REPO`     | Settings → Secrets and variables → Actions → **Variables** *(optional)* | Override the image repo name; defaults to `<DOCKERHUB_USERNAME>/corrivex` |
 
 ### Cutting a release

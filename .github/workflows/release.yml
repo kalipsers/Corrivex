@@ -155,3 +155,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false   # cleaner Docker Hub UI; flip to true if you want SLSA attestations
+
+      # Refresh the Docker Hub repo "Overview" tab from DOCKERHUB.md so anyone
+      # landing on the image page sees the latest quickstart + compose snippet.
+      # Requires the Docker Hub token to have at least "Repository: Read &
+      # Write" scope on the target repo (account-wide tokens work fine).
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ steps.repo.outputs.repo }}
+          short-description: "Centralised winget + Windows Update orchestration for Windows endpoints"
+          readme-filepath: ./DOCKERHUB.md
