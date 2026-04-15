@@ -392,7 +392,14 @@ func (r *Runtime) fullScanWS(ctx context.Context) {
 
 	pkgs, err := winget.ListUpgrades()
 	if err != nil {
-		r.log("winget list failed: %v", err)
+		r.log("winget upgrades list failed: %v", err)
+	}
+	// Full inventory of installed software for the per-host history view.
+	installed, err := winget.ListInstalled()
+	if err != nil {
+		r.log("winget list (installed) failed: %v", err)
+	} else {
+		r.log("installed packages enumerated: %d", len(installed))
 	}
 	users := detectLocalUsers()
 	admins := detectLocalAdmins()
@@ -409,18 +416,19 @@ func (r *Runtime) fullScanWS(ctx context.Context) {
 	}
 
 	body := map[string]any{
-		"type":            "report",
-		"action":          "full_report",
-		"hostname":        hostname,
-		"domain":          domain,
-		"os_version":      osv,
-		"username":        user,
-		"timestamp":       time.Now().Format("2006-01-02 15:04:05"),
-		"users":           users,
-		"local_admins":    admins,
-		"packages":        pkgs,
-		"windows_updates": wuList,
-		"update_count":    len(pkgs),
+		"type":               "report",
+		"action":             "full_report",
+		"hostname":           hostname,
+		"domain":             domain,
+		"os_version":         osv,
+		"username":           user,
+		"timestamp":          time.Now().Format("2006-01-02 15:04:05"),
+		"users":              users,
+		"local_admins":       admins,
+		"packages":           pkgs,
+		"installed_software": installed,
+		"windows_updates":    wuList,
+		"update_count":       len(pkgs),
 	}
 	if !r.sendWS(body) {
 		// Fallback: HTTP report (used only if the WS went away right now).
@@ -438,23 +446,28 @@ func (r *Runtime) FullScan() {
 
 	pkgs, err := winget.ListUpgrades()
 	if err != nil {
-		r.log("winget list failed: %v", err)
+		r.log("winget upgrades list failed: %v", err)
+	}
+	installed, err := winget.ListInstalled()
+	if err != nil {
+		r.log("winget list (installed) failed: %v", err)
 	}
 	users := detectLocalUsers()
 	admins := detectLocalAdmins()
 
 	body := map[string]any{
-		"action":       "full_report",
-		"hostname":     hostname,
-		"domain":       domain,
-		"os_version":   osv,
-		"username":     user,
-		"timestamp":    time.Now().Format("2006-01-02 15:04:05"),
-		"users":        users,
-		"local_admins": admins,
-		"packages":     pkgs,
-		"update_count": len(pkgs),
-		"agent_log":    r.drainLog(),
+		"action":             "full_report",
+		"hostname":           hostname,
+		"domain":             domain,
+		"os_version":         osv,
+		"username":           user,
+		"timestamp":          time.Now().Format("2006-01-02 15:04:05"),
+		"users":              users,
+		"local_admins":       admins,
+		"packages":           pkgs,
+		"installed_software": installed,
+		"update_count":       len(pkgs),
+		"agent_log":          r.drainLog(),
 	}
 
 	resp, err := r.post("report", body)

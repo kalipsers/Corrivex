@@ -86,6 +86,25 @@ func ListUpgrades() ([]Package, error) {
 	return parseUpgradeTable(out), nil
 }
 
+// ListInstalled runs `winget list` and returns every package that has both
+// a usable Id and a version. Used to populate the per-host installed-
+// software inventory + diff-driven version history on the server.
+//
+// Skips Windows Add-Remove-Programs entries that don't carry a
+// `Vendor.Product`-style identifier (their IDs use backslashes which the
+// shared parser ignores) — those aren't actionable from winget anyway.
+func ListInstalled() ([]Package, error) {
+	wg := Find()
+	if wg == "" {
+		return nil, fmt.Errorf("winget not found")
+	}
+	out, err := runWinget(wg, "list", "--accept-source-agreements")
+	if err != nil && len(out) == 0 {
+		return nil, err
+	}
+	return parseListTable(out), nil
+}
+
 // RunUpgradeAll runs `winget upgrade --all --silent`.
 func RunUpgradeAll() (string, int) {
 	wg := Find()
@@ -300,6 +319,57 @@ func runWinget2(wg string, args ...string) (string, int) {
 		}
 	}
 	return string(b), code
+}
+
+// parseListTable extracts (name, id, version, source) tuples from a
+// `winget list` output. Same column-aware approach as parseUpgradeTable —
+// the only difference is the absence of the "Available" column.
+func parseListTable(out string) []Package {
+	var pkgs []Package
+	lines := strings.Split(strings.ReplaceAll(out, "\r", ""), "\n")
+	sepIdx := -1
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), strings.Repeat("-", 10)) {
+			sepIdx = i
+			break
+		}
+	}
+	if sepIdx < 0 {
+		return pkgs
+	}
+	for i := sepIdx + 1; i < len(lines); i++ {
+		l := strings.TrimRight(lines[i], " \t")
+		if l == "" {
+			continue
+		}
+		// Footer counters / pagination hints we should ignore.
+		ll := strings.ToLower(l)
+		if strings.Contains(ll, "package(s)") || strings.Contains(ll, "upgrades available") {
+			continue
+		}
+		m := idPattern.FindStringSubmatchIndex(l)
+		if m == nil {
+			continue
+		}
+		id := l[m[2]:m[3]]
+		name := strings.TrimSpace(l[:m[2]])
+		rest := strings.Fields(l[m[3]:])
+		var ver, src string
+		if len(rest) > 0 {
+			ver = rest[0]
+		}
+		if len(rest) > 1 {
+			src = rest[1]
+		}
+		if src == "" {
+			src = "winget"
+		}
+		if ver == "" || ver == "?" {
+			continue
+		}
+		pkgs = append(pkgs, Package{Name: name, ID: id, Version: ver, Source: src})
+	}
+	return pkgs
 }
 
 // parseUpgradeTable extracts packages from winget's fixed-width text output.

@@ -55,6 +55,34 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.3.0 — Per-host installed-software inventory + version history
+
+**Minor** — significant new capability with a fully migrated schema
+(automatic — no manual steps).
+
+- Each full scan now also runs `winget list` and ships the result as a new
+  `installed_software` field in the report. The server diffs that against
+  the previous snapshot for the host and writes one of `installed`,
+  `updated`, or `removed` rows into a per-package audit log
+  (`installed_software_history`). The current snapshot lives in
+  `installed_software` (one row per host+package).
+- New device-modal sub-tab **Installed software** lists every package
+  reported, with a search filter, monospace IDs, version, and source.
+  Click any row to expand a chronological version-history table for that
+  package — versions, change types, timestamps. Lazy-loaded on first tab
+  click.
+- New API endpoints (admin session required):
+  - `GET /api/?action=installed_software&host=HOST` — current snapshot
+  - `GET /api/?action=software_history&host=HOST&pkg_id=ID&limit=N` — audit
+- Schema migration **10** — `installed_software` + `installed_software_history`
+  tables added to both MariaDB and SQLite migration paths. Idempotent.
+- `DeletePC` now also wipes both new tables so a force-removed device
+  doesn't leave orphaned inventory rows.
+- Windows-only: agent's `winget.ListInstalled()` reuses the same column-
+  aware parser as `winget upgrade`. Entries without a winget-style
+  `Vendor.Product` ID (Add/Remove Programs leftovers) are skipped — those
+  aren't actionable from winget anyway.
+
 ### 1.2.2 — Realistic WU sizes + persistent install state
 
 **Patch**

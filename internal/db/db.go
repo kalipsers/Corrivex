@@ -267,6 +267,34 @@ var migrations = []struct {
 		`ALTER TABLE pcs ADD COLUMN IF NOT EXISTS windows_updates LONGTEXT NULL`,
 		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single') NOT NULL DEFAULT 'check'`,
 	}},
+	{10, "Per-host installed-software inventory + history", []string{
+		`CREATE TABLE IF NOT EXISTS installed_software (
+			id BIGINT NOT NULL AUTO_INCREMENT,
+			hostname VARCHAR(255) NOT NULL,
+			package_id VARCHAR(255) NOT NULL,
+			package_name VARCHAR(500) NULL,
+			version VARCHAR(200) NULL,
+			source VARCHAR(50) NULL,
+			first_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			last_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_host_pkg (hostname, package_id),
+			KEY idx_inst_hostname (hostname)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS installed_software_history (
+			id BIGINT NOT NULL AUTO_INCREMENT,
+			hostname VARCHAR(255) NOT NULL,
+			package_id VARCHAR(255) NOT NULL,
+			package_name VARCHAR(500) NULL,
+			old_version VARCHAR(200) NULL,
+			new_version VARCHAR(200) NULL,
+			change_type ENUM('installed','updated','removed') NOT NULL,
+			detected_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			KEY idx_hist_host_pkg (hostname, package_id),
+			KEY idx_hist_host_time (hostname, detected_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	}},
 }
 
 func (d *DB) Migrate() error {
@@ -433,6 +461,32 @@ var migrationsSQLite = []struct {
 	{9, "Windows Update inventory + task types", []string{
 		`ALTER TABLE pcs ADD COLUMN windows_updates TEXT`,
 		// The CHECK on tasks.type from v3 already covers windows_update_*.
+	}},
+	{10, "Per-host installed-software inventory + history", []string{
+		`CREATE TABLE IF NOT EXISTS installed_software (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL,
+			package_id TEXT NOT NULL,
+			package_name TEXT,
+			version TEXT,
+			source TEXT,
+			first_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			last_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (hostname, package_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_inst_hostname ON installed_software(hostname)`,
+		`CREATE TABLE IF NOT EXISTS installed_software_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL,
+			package_id TEXT NOT NULL,
+			package_name TEXT,
+			old_version TEXT,
+			new_version TEXT,
+			change_type TEXT NOT NULL CHECK (change_type IN ('installed','updated','removed')),
+			detected_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_hist_host_pkg ON installed_software_history(hostname, package_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_hist_host_time ON installed_software_history(hostname, detected_at)`,
 	}},
 }
 
@@ -634,20 +688,21 @@ func (d *DB) TasksForHost(hostname string, limit int) ([]Task, error) {
 // -- Reports ----------------------------------------------------------------
 
 type FullReport struct {
-	Hostname       string           `json:"hostname"`
-	Host           string           `json:"host"`
-	Action         string           `json:"action"`
-	Timestamp      string           `json:"timestamp"`
-	Username       string           `json:"username"`
-	User           string           `json:"user"`
-	Domain         string           `json:"domain"`
-	OSVersion      string           `json:"os_version"`
-	Users          []map[string]any `json:"users"`
-	LocalAdmins    []map[string]any `json:"local_admins"`
-	Packages       []map[string]any `json:"packages"`
-	WindowsUpdates []map[string]any `json:"windows_updates"`
-	UpdateCount    *int             `json:"update_count"`
-	AgentLog       string           `json:"agent_log"`
+	Hostname          string           `json:"hostname"`
+	Host              string           `json:"host"`
+	Action            string           `json:"action"`
+	Timestamp         string           `json:"timestamp"`
+	Username          string           `json:"username"`
+	User              string           `json:"user"`
+	Domain            string           `json:"domain"`
+	OSVersion         string           `json:"os_version"`
+	Users             []map[string]any `json:"users"`
+	LocalAdmins       []map[string]any `json:"local_admins"`
+	Packages          []map[string]any `json:"packages"`
+	WindowsUpdates    []map[string]any `json:"windows_updates"`
+	InstalledSoftware []map[string]any `json:"installed_software"`
+	UpdateCount       *int             `json:"update_count"`
+	AgentLog          string           `json:"agent_log"`
 }
 
 func (d *DB) StoreFullReport(r FullReport, clientIP string) ([]Task, error) {
@@ -748,6 +803,13 @@ func (d *DB) StoreFullReport(r FullReport, clientIP string) ([]Task, error) {
 	}
 
 	d.pruneReports(hostname, action)
+
+	// Inventory + history sync. Only on full_report (post_task_report
+	// doesn't carry the full installed list — it's a delta-style update).
+	if action == "full_report" && r.InstalledSoftware != nil {
+		_ = d.SyncInstalledSoftware(hostname, r.InstalledSoftware)
+	}
+
 	return d.PendingTasks(hostname)
 }
 
@@ -924,7 +986,8 @@ func (d *DB) SetAgentToken(hostname, token string) error {
 	return err
 }
 
-// DeletePC hard-removes a host and all its related tasks/reports.
+// DeletePC hard-removes a host and all its related tasks/reports + the
+// installed-software inventory and its history.
 func (d *DB) DeletePC(hostname string) error {
 	tx, err := d.sql.Begin()
 	if err != nil {
@@ -934,6 +997,8 @@ func (d *DB) DeletePC(hostname string) error {
 	for _, stmt := range []string{
 		"DELETE FROM tasks WHERE hostname=?",
 		"DELETE FROM reports WHERE hostname=?",
+		"DELETE FROM installed_software WHERE hostname=?",
+		"DELETE FROM installed_software_history WHERE hostname=?",
 		"DELETE FROM pcs WHERE hostname=?",
 	} {
 		if _, err := tx.Exec(stmt, hostname); err != nil {
@@ -1028,6 +1093,183 @@ func (d *DB) PackageCacheSet(query string, results []byte) {
 		stmt = "INSERT INTO package_cache (query, results) VALUES (?,?) ON CONFLICT(query) DO UPDATE SET results=excluded.results, cached_at=CURRENT_TIMESTAMP"
 	}
 	d.sql.Exec(stmt, q, string(results))
+}
+
+// -- Installed-software inventory ------------------------------------------
+
+// InstalledSoftware is the current snapshot row for one host+package pair.
+type InstalledSoftware struct {
+	Hostname    string    `json:"hostname"`
+	PackageID   string    `json:"id"`
+	PackageName string    `json:"name"`
+	Version     string    `json:"version"`
+	Source      string    `json:"source"`
+	FirstSeen   time.Time `json:"first_seen"`
+	LastSeen    time.Time `json:"last_seen"`
+}
+
+// SoftwareHistory is one entry in the append-only audit log for a (host,
+// package) pair.
+type SoftwareHistory struct {
+	ID          int64     `json:"id"`
+	Hostname    string    `json:"hostname"`
+	PackageID   string    `json:"package_id"`
+	PackageName string    `json:"package_name"`
+	OldVersion  string    `json:"old_version"`
+	NewVersion  string    `json:"new_version"`
+	ChangeType  string    `json:"change_type"`
+	DetectedAt  time.Time `json:"detected_at"`
+}
+
+// SyncInstalledSoftware diffs the incoming installed-software list against
+// the current snapshot for hostname and writes installed/updated/removed
+// rows into the audit history. Idempotent — calling with the same payload
+// twice produces no new history entries (just refreshes last_seen).
+func (d *DB) SyncInstalledSoftware(hostname string, incoming []map[string]any) error {
+	type curRow struct{ name, version string }
+	current := map[string]curRow{}
+	rows, err := d.sql.Query("SELECT package_id, package_name, version FROM installed_software WHERE hostname=?", hostname)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var pid string
+		var pname, ver sql.NullString
+		if err := rows.Scan(&pid, &pname, &ver); err != nil {
+			rows.Close()
+			return err
+		}
+		current[pid] = curRow{name: pname.String, version: ver.String}
+	}
+	rows.Close()
+
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	upsertSQL := "INSERT INTO installed_software (hostname, package_id, package_name, version, source, first_seen, last_seen) VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON DUPLICATE KEY UPDATE package_name=VALUES(package_name), version=VALUES(version), source=VALUES(source), last_seen=CURRENT_TIMESTAMP"
+	if d.driver == DriverSQLite {
+		upsertSQL = "INSERT INTO installed_software (hostname, package_id, package_name, version, source, first_seen, last_seen) VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(hostname,package_id) DO UPDATE SET package_name=excluded.package_name, version=excluded.version, source=excluded.source, last_seen=CURRENT_TIMESTAMP"
+	}
+	insertHistory, err := tx.Prepare("INSERT INTO installed_software_history (hostname, package_id, package_name, old_version, new_version, change_type) VALUES (?,?,?,?,?,?)")
+	if err != nil {
+		return err
+	}
+	defer insertHistory.Close()
+	upsertCurrent, err := tx.Prepare(upsertSQL)
+	if err != nil {
+		return err
+	}
+	defer upsertCurrent.Close()
+
+	seen := make(map[string]bool, len(incoming))
+	for _, p := range incoming {
+		id, _ := p["id"].(string)
+		if id == "" {
+			continue
+		}
+		ver, _ := p["version"].(string)
+		name, _ := p["name"].(string)
+		src, _ := p["source"].(string)
+		seen[id] = true
+
+		cur, exists := current[id]
+		if !exists {
+			if _, err := insertHistory.Exec(hostname, id, name, "", ver, "installed"); err != nil {
+				return err
+			}
+		} else if cur.version != ver {
+			if _, err := insertHistory.Exec(hostname, id, name, cur.version, ver, "updated"); err != nil {
+				return err
+			}
+		}
+		if _, err := upsertCurrent.Exec(hostname, id, name, ver, src); err != nil {
+			return err
+		}
+	}
+
+	// Find removals: rows in current but not in incoming.
+	if len(current) > 0 {
+		removeRow, err := tx.Prepare("DELETE FROM installed_software WHERE hostname=? AND package_id=?")
+		if err != nil {
+			return err
+		}
+		defer removeRow.Close()
+		for id, cur := range current {
+			if seen[id] {
+				continue
+			}
+			if _, err := insertHistory.Exec(hostname, id, cur.name, cur.version, "", "removed"); err != nil {
+				return err
+			}
+			if _, err := removeRow.Exec(hostname, id); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// InstalledSoftwareForHost returns the current snapshot for hostname,
+// alphabetically sorted by name.
+func (d *DB) InstalledSoftwareForHost(hostname string) ([]InstalledSoftware, error) {
+	rows, err := d.sql.Query(
+		"SELECT hostname, package_id, package_name, version, source, first_seen, last_seen FROM installed_software WHERE hostname=? ORDER BY LOWER(package_name), package_id",
+		hostname)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []InstalledSoftware
+	for rows.Next() {
+		var s InstalledSoftware
+		var pname, ver, src sql.NullString
+		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen); err != nil {
+			return nil, err
+		}
+		s.PackageName = pname.String
+		s.Version = ver.String
+		s.Source = src.String
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// SoftwareHistoryForHost returns the history for one (host, package),
+// newest first, capped at the given limit (use 200 for the dashboard).
+func (d *DB) SoftwareHistoryForHost(hostname, pkgID string, limit int) ([]SoftwareHistory, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := d.sql.Query(
+		"SELECT id, hostname, package_id, package_name, old_version, new_version, change_type, detected_at FROM installed_software_history WHERE hostname=? AND package_id=? ORDER BY detected_at DESC, id DESC LIMIT ?",
+		hostname, pkgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SoftwareHistory
+	for rows.Next() {
+		var h SoftwareHistory
+		var pname, ov, nv sql.NullString
+		if err := rows.Scan(&h.ID, &h.Hostname, &h.PackageID, &pname, &ov, &nv, &h.ChangeType, &h.DetectedAt); err != nil {
+			return nil, err
+		}
+		h.PackageName = pname.String
+		h.OldVersion = ov.String
+		h.NewVersion = nv.String
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// PurgeInstalledForHost wipes both tables for a hostname — called from
+// DeletePC so a force-removed device doesn't leave orphan rows.
+func (d *DB) PurgeInstalledForHost(hostname string) {
+	d.sql.Exec("DELETE FROM installed_software WHERE hostname=?", hostname)
+	d.sql.Exec("DELETE FROM installed_software_history WHERE hostname=?", hostname)
 }
 
 // -- Users ------------------------------------------------------------------

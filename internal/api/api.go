@@ -152,6 +152,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.listDomains(w, r)
 	case method == "GET" && action == "tasks":
 		s.hostTasks(w, r)
+	case method == "GET" && action == "installed_software":
+		s.installedSoftware(w, r)
+	case method == "GET" && action == "software_history":
+		s.softwareHistory(w, r)
 	case method == "GET" && r.URL.Query().Get("host") != "":
 		s.singlePC(w, r)
 	case method == "GET":
@@ -1049,6 +1053,49 @@ func (s *Server) listDomains(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, doms)
+}
+
+// installedSoftware returns the current installed-package snapshot for a host.
+func (s *Server) installedSoftware(w http.ResponseWriter, r *http.Request) {
+	host := s.normalizeHost(r.URL.Query().Get("host"))
+	if host == "" {
+		writeJSON(w, 400, map[string]string{"error": "missing host"})
+		return
+	}
+	rows, err := s.DB.InstalledSoftwareForHost(host)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if rows == nil {
+		rows = []db.InstalledSoftware{}
+	}
+	writeJSON(w, 200, rows)
+}
+
+// softwareHistory returns version-change audit entries for one (host, package).
+func (s *Server) softwareHistory(w http.ResponseWriter, r *http.Request) {
+	host := s.normalizeHost(r.URL.Query().Get("host"))
+	pkgID := strings.TrimSpace(r.URL.Query().Get("pkg_id"))
+	if host == "" || pkgID == "" {
+		writeJSON(w, 400, map[string]string{"error": "host and pkg_id required"})
+		return
+	}
+	limit := 200
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+	}
+	rows, err := s.DB.SoftwareHistoryForHost(host, pkgID, limit)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if rows == nil {
+		rows = []db.SoftwareHistory{}
+	}
+	writeJSON(w, 200, rows)
 }
 
 func (s *Server) hostTasks(w http.ResponseWriter, r *http.Request) {

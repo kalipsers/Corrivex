@@ -618,6 +618,54 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
   padding: 1px 6px; border-radius: 4px; border: 1px solid var(--c-border);
 }
 
+/* Installed-software panel */
+.inst-list { display: flex; flex-direction: column; gap: 4px; }
+.inst {
+  display: grid; grid-template-columns: 1fr auto auto;
+  gap: 12px; align-items: center;
+  padding: 8px 12px; border: 1px solid var(--c-border); border-radius: var(--r-md);
+  background: var(--c-surface); font-size: 13px;
+  cursor: pointer;
+  transition: background var(--d-fast) var(--ease), border-color var(--d-fast) var(--ease);
+}
+.inst:hover { background: #F8FAFC; border-color: var(--c-border-2); }
+.inst.is-open { background: #F1F5F9; border-color: var(--c-border-2); }
+.inst-title { font-weight: 600; color: var(--c-primary); }
+.inst-id { font-family: ui-monospace, monospace; font-size: 11px; color: var(--c-muted); margin-top: 2px; word-break: break-all; }
+.inst-version {
+  font-family: ui-monospace, monospace; font-size: 12px;
+  color: var(--c-text-2); background: var(--c-bg);
+  padding: 2px 8px; border-radius: 4px; border: 1px solid var(--c-border);
+  white-space: nowrap;
+}
+.inst-source {
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--c-muted);
+}
+
+.inst-history {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  padding: 8px 12px;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+}
+.inst-history table { width: 100%; border-collapse: collapse; }
+.inst-history th, .inst-history td {
+  padding: 4px 8px; text-align: left; border-bottom: 1px solid var(--c-border);
+  font-family: ui-monospace, monospace; font-size: 11.5px;
+}
+.inst-history th { font-weight: 600; color: var(--c-muted); text-transform: uppercase; letter-spacing: .06em; font-size: 10.5px; font-family: 'Plus Jakarta Sans', sans-serif; }
+.inst-history tr:last-child td { border-bottom: 0; }
+.inst-change-installed { color: var(--c-success); font-weight: 600; }
+.inst-change-updated   { color: var(--c-info);    font-weight: 600; }
+.inst-change-removed   { color: var(--c-danger);  font-weight: 600; }
+.inst-empty {
+  padding: 20px; text-align: center; color: var(--c-muted); font-size: 12px;
+}
+
 /* Key-value list */
 .kv { display: grid; grid-template-columns: 140px 1fr; gap: 6px 16px; font-size: 13px; }
 .kv dt { color: var(--c-muted); font-weight: 500; }
@@ -1223,6 +1271,7 @@ function renderDeviceModal(pc) {
   html += '<button class="modal-tab' + (prevTab==='overview'?' is-active':'') + '" data-modal-tab="overview">Overview</button>';
   html += '<button class="modal-tab' + (prevTab==='winget'?' is-active':'') + '" data-modal-tab="winget">Winget <span class="chip muted">' + pkgs.length + '</span></button>';
   html += '<button class="modal-tab' + (prevTab==='wu'?' is-active':'') + '" data-modal-tab="wu">Windows update <span class="chip muted">' + wu.length + '</span></button>';
+  html += '<button class="modal-tab' + (prevTab==='installed'?' is-active':'') + '" data-modal-tab="installed">Installed software</button>';
   html += '</nav>';
 
   html += '<div class="modal-panel' + (prevTab==='overview'?' is-active':'') + '" data-modal-panel="overview">';
@@ -1358,6 +1407,18 @@ function renderDeviceModal(pc) {
   html += '</section>';
   html += '</div>'; // /wu
 
+  // ---- Installed software panel (lazy-loaded) -------------------------
+  html += '<div class="modal-panel' + (prevTab==='installed'?' is-active':'') + '" data-modal-panel="installed">';
+  html += '<section class="section">';
+  html += '<div class="section-hd"><div class="section-title">Installed software</div>';
+  html += '<input type="search" class="input" id="installed-filter" placeholder="filter by name or id" style="min-width:220px;font-size:12px;padding:6px 10px">';
+  html += '</div>';
+  html += '<div id="installed-list" data-host="' + escapeHTML(pc.hostname) + '" data-loaded="0">';
+  html += '<div class="card-empty">Click the tab to load…</div>';
+  html += '</div>';
+  html += '</section>';
+  html += '</div>'; // /installed
+
   // Recent tasks / users / admins — belong with Overview. Re-open the panel
   // (hidden unless Overview is selected) and drop them in.
   html += '<div class="modal-panel' + (prevTab==="overview"?' is-active':'') + '" data-modal-panel="overview">';
@@ -1413,9 +1474,103 @@ function bindModalTabs() {
       const key = btn.dataset.modalTab;
       document.querySelectorAll('[data-modal-tab]').forEach(b => b.classList.toggle('is-active', b.dataset.modalTab === key));
       document.querySelectorAll('[data-modal-panel]').forEach(p => p.classList.toggle('is-active', p.dataset.modalPanel === key));
+      // Lazy-load installed software list the first time the tab opens.
+      if (key === 'installed') loadInstalledSoftware();
     });
   });
+  // Also auto-load if the tab was already active when modal opened
+  // (happens if user re-opens a host whose previous active tab was installed).
+  if (document.querySelector('[data-modal-tab="installed"]')?.classList.contains('is-active')) {
+    loadInstalledSoftware();
+  }
+  // Filter input
+  const f = document.getElementById('installed-filter');
+  if (f) f.addEventListener('input', applyInstalledFilter);
 }
+
+async function loadInstalledSoftware() {
+  const wrap = document.getElementById('installed-list');
+  if (!wrap || wrap.dataset.loaded === '1') return;
+  wrap.dataset.loaded = '1';
+  const host = wrap.dataset.host;
+  wrap.innerHTML = '<div class="card-empty">Loading…</div>';
+  try {
+    const res = await fetch(API + '?action=installed_software&host=' + encodeURIComponent(host), { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const list = await res.json();
+    renderInstalledList(list || []);
+  } catch (e) {
+    wrap.innerHTML = '<div class="banner is-err">Could not load installed software: ' + escapeHTML(e.message) + '</div>';
+  }
+}
+
+function renderInstalledList(list) {
+  const wrap = document.getElementById('installed-list');
+  if (!wrap) return;
+  if (!list.length) {
+    wrap.innerHTML = '<div class="card-empty">No installed software reported yet — wait for the next full scan (~24h by default) or trigger one from the Overview tab.</div>';
+    return;
+  }
+  let html = '<div class="inst-list">';
+  for (const it of list) {
+    const id = it.id || it.package_id || '';
+    const name = it.name || it.package_name || id;
+    const ver = it.version || '?';
+    const src = (it.source || '').toLowerCase();
+    html += '<div class="inst" data-inst-row data-pkg-id="' + escapeHTML(id) + '" data-host="' + escapeHTML(it.hostname) + '" data-search="' + escapeHTML((name + ' ' + id).toLowerCase()) + '">';
+    html += '<div><div class="inst-title">' + escapeHTML(name) + '</div><div class="inst-id">' + escapeHTML(id) + '</div></div>';
+    html += '<span class="inst-version">' + escapeHTML(ver) + '</span>';
+    html += '<span class="inst-source">' + escapeHTML(src) + '</span>';
+    html += '</div>';
+  }
+  html += '</div>';
+  wrap.innerHTML = html;
+}
+
+function applyInstalledFilter() {
+  const q = (document.getElementById('installed-filter')?.value || '').toLowerCase();
+  document.querySelectorAll('#installed-list .inst').forEach(row => {
+    row.style.display = !q || row.dataset.search.includes(q) ? '' : 'none';
+  });
+}
+
+// Click on an installed row → toggle history below it.
+document.addEventListener('click', async (e) => {
+  const row = e.target.closest('[data-inst-row]');
+  if (!row) return;
+  const open = row.classList.toggle('is-open');
+  if (!open) {
+    row.querySelectorAll('.inst-history').forEach(n => n.remove());
+    return;
+  }
+  const hist = document.createElement('div');
+  hist.className = 'inst-history';
+  hist.innerHTML = 'Loading…';
+  row.appendChild(hist);
+  try {
+    const u = API + '?action=software_history&host=' + encodeURIComponent(row.dataset.host) +
+                    '&pkg_id=' + encodeURIComponent(row.dataset.pkgId);
+    const res = await fetch(u, { credentials: 'same-origin' });
+    const events = await res.json();
+    if (!Array.isArray(events) || events.length === 0) {
+      hist.innerHTML = '<div class="inst-empty">No version-change history recorded yet. The first full scan after install creates the baseline; subsequent scans record updates and removals.</div>';
+      return;
+    }
+    let h = '<table><thead><tr><th>When</th><th>Change</th><th>From</th><th>To</th></tr></thead><tbody>';
+    for (const ev of events) {
+      const cls = 'inst-change-' + ev.change_type;
+      const when = ev.detected_at ? new Date(ev.detected_at).toLocaleString() : '';
+      h += '<tr><td>' + escapeHTML(when) + '</td>';
+      h += '<td><span class="' + cls + '">' + escapeHTML(ev.change_type) + '</span></td>';
+      h += '<td>' + escapeHTML(ev.old_version || '—') + '</td>';
+      h += '<td>' + escapeHTML(ev.new_version || '—') + '</td></tr>';
+    }
+    h += '</tbody></table>';
+    hist.innerHTML = h;
+  } catch (err) {
+    hist.innerHTML = '<div class="inst-empty">Failed: ' + escapeHTML(err.message) + '</div>';
+  }
+});
 
 // One-time binding for the persistent log-clear button.
 document.getElementById('log-clear-btn')?.addEventListener('click', () => {
