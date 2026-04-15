@@ -55,6 +55,25 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.5.5 — go mod tidy to unblock CI
+
+**Patch**
+
+1.5.4 left `github.com/johnfercher/maroto/v2` and `golang.org/x/image`
+marked `// indirect` in `go.mod`, but they are directly imported from
+`internal/report/pdf.go`. The CI "vet + test" step runs
+`go mod tidy && git diff --exit-code` and flagged the mismatch, failing
+the main-branch build right after the v1.5.4 tag was pushed.
+
+- Ran `go mod tidy` locally. Requires now list `maroto/v2` and
+  `x/image` at the top, without the `// indirect` marker. `go.sum`
+  adjusted to keep the compatibility block tidy (adds `stretchr/objx`,
+  `yaml.v3`, `check.v1` that maroto's test tree transitively pulls).
+- `go` directive moved to `1.26.1` (what `tidy` settled on after the
+  maroto upgrade). Go's auto-toolchain handles it for the
+  `setup-go@v5 go-version: 1.23` CI runner.
+- No runtime behaviour change — strictly a manifest cleanup.
+
 ### 1.5.4 — UTF-8 fonts in PDFs (fix mojibake in reports)
 
 **Patch**
