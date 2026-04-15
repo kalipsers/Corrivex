@@ -1101,6 +1101,37 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
       </div>
     </div>
 
+    <!-- Local installers (1.7.1+) -->
+    <div class="card" style="max-width:960px;margin-top:16px" data-admin-only>
+      <div class="card-hd">
+        <div>
+          <h2 class="h2">Local installers</h2>
+          <div class="sub" style="color:var(--c-muted);font-size:12px;margin-top:4px">
+            Admin-curated MSI / EXE installers on a local disk path or UNC share. Agents detect the framework (MSI / Inno / NSIS / WiX / Squirrel / InstallShield) and run the matching silent flags.
+          </div>
+        </div>
+      </div>
+      <div class="card-bd">
+        <div class="field">
+          <label for="li-allowed-prefixes">Allowed local path prefixes <span class="sub" style="font-size:11px">(one per line; UNC paths always allowed)</span></label>
+          <textarea id="li-allowed-prefixes" rows="2" placeholder="e.g. D:\Corrivex\installers\"></textarea>
+          <div class="hint">Non-UNC installer paths must start with one of these prefixes. Empty list = UNC-only mode.</div>
+        </div>
+        <div style="margin:8px 0 14px 0;display:flex;justify-content:flex-end">
+          <button class="btn btn-sm" id="save-li-prefixes-btn">Save allowed prefixes</button>
+        </div>
+        <div class="tbl-wrap">
+          <table class="tbl" id="li-table">
+            <thead><tr><th>Name</th><th>Path</th><th>Framework</th><th>Silent args override</th><th>Exit codes</th><th style="text-align:right">Actions</th></tr></thead>
+            <tbody><tr><td colspan="6" class="sub">Loading…</td></tr></tbody>
+          </table>
+        </div>
+        <div style="margin-top:14px;display:flex;justify-content:flex-end">
+          <button class="btn btn-primary" id="new-li-btn">Add installer</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Registry scan filters (1.6.0+) -->
     <div class="card" style="max-width:720px;margin-top:16px" data-admin-only>
       <div class="card-hd">
@@ -1293,6 +1324,54 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
       </section>
     </div>
     <div class="modal-ft"><button class="btn" data-close>Close</button></div>
+  </div>
+</div>
+
+<!-- Add/edit local installer modal (admin, 1.7.1+) -->
+<div class="modal-backdrop" id="li-modal" role="dialog" aria-modal="true" data-admin-only>
+  <div class="modal" style="max-width:620px">
+    <div class="modal-hd">
+      <div class="modal-title" id="li-modal-title">Add local installer</div>
+      <button class="icon-btn" data-close><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg></button>
+    </div>
+    <div class="modal-bd">
+      <input type="hidden" id="li-edit-id">
+      <div class="field"><label>Name</label><input type="text" id="li-name" placeholder="e.g. AutoCAD 2025 Setup"></div>
+      <div class="field">
+        <label>Path (UNC or local)</label>
+        <input type="text" id="li-path" placeholder="\\fileserver\installers\autocad-2025.exe">
+        <div class="hint">UNC paths need read access from the agent's SYSTEM context. 1.7.2 adds stored SMB credentials.</div>
+      </div>
+      <div class="field">
+        <label>Framework hint (optional)</label>
+        <select class="input" id="li-framework">
+          <option value="">Auto-detect</option>
+          <option value="msi">MSI</option>
+          <option value="inno">InnoSetup</option>
+          <option value="nsis">NSIS</option>
+          <option value="wix_burn">WiX Burn bundle</option>
+          <option value="squirrel">Squirrel (Electron)</option>
+          <option value="installshield">InstallShield</option>
+          <option value="advanced_installer">Advanced Installer</option>
+        </select>
+        <div class="hint">Leave on Auto-detect unless the agent consistently misidentifies the installer.</div>
+      </div>
+      <div class="field">
+        <label>Silent args override (optional)</label>
+        <input type="text" id="li-args" placeholder='/S /norestart or /qn /norestart'>
+        <div class="hint">Replaces Corrivex's default silent flags. Use quoted args for embedded flags, e.g. <code>/s /v&quot;/qn /norestart&quot;</code>.</div>
+      </div>
+      <div class="field">
+        <label>Expected exit codes</label>
+        <input type="text" id="li-codes" value="0,3010" placeholder="0,3010">
+        <div class="hint">Comma-separated. 0 = success, 3010 = success + reboot required. 1641 = reboot initiated.</div>
+      </div>
+      <div class="field"><label>Notes (optional)</label><textarea id="li-notes" rows="2"></textarea></div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="li-save-btn">Save</button>
+    </div>
   </div>
 </div>
 
@@ -3065,6 +3144,137 @@ document.getElementById('save-regscan-btn')?.addEventListener('click', async () 
     const json = await res.json();
     if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
     toast('Registry filter settings saved', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+});
+
+// ---- Local installers (1.7.1+) -------------------------------------------
+async function loadLocalInstallers() {
+  const tbody = document.querySelector('#li-table tbody');
+  if (!tbody) return;
+  try {
+    const [rows, settings] = await Promise.all([
+      fetch(API + '?action=list_local_installers', { credentials: 'same-origin' }).then(r => r.json()),
+      fetch(API + '?action=get_settings', { credentials: 'same-origin' }).then(r => r.json()),
+    ]);
+    const prefixes = document.getElementById('li-allowed-prefixes');
+    if (prefixes) prefixes.value = settings.local_installer_allowed_prefixes || '';
+    if (!Array.isArray(rows) || rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="sub">No local installers configured yet.</td></tr>';
+      return;
+    }
+    let html = '';
+    for (const r of rows) {
+      html += '<tr>';
+      html += '<td><strong>' + escapeHTML(r.name) + '</strong>';
+      if (r.notes) html += '<div class="sub" style="font-size:11px">' + escapeHTML(r.notes) + '</div>';
+      html += '</td>';
+      html += '<td class="mono" style="font-size:11px;word-break:break-all">' + escapeHTML(r.path) + '</td>';
+      html += '<td class="sub">' + escapeHTML(r.framework_hint || 'auto') + '</td>';
+      html += '<td class="mono sub" style="font-size:11px">' + escapeHTML(r.silent_args_override || '(default)') + '</td>';
+      html += '<td class="mono sub" style="font-size:11px">' + escapeHTML(r.expected_exit_codes) + '</td>';
+      html += '<td style="text-align:right;white-space:nowrap">';
+      html += '<button class="btn btn-sm btn-ghost" data-action="li-edit" data-row=\'' + escapeHTML(JSON.stringify(r)) + '\'>Edit</button> ';
+      html += '<button class="btn btn-sm btn-ghost" data-action="li-delete" data-id="' + r.id + '" data-name="' + escapeHTML(r.name) + '">Delete</button>';
+      html += '</td></tr>';
+    }
+    tbody.innerHTML = html;
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="6" class="sub">Load failed: ' + escapeHTML(String(e)) + '</td></tr>';
+  }
+}
+// Load when Settings tab becomes active.
+document.addEventListener('click', e => {
+  const t = e.target.closest('.tab');
+  if (t && t.dataset.tab === 'settings') loadLocalInstallers();
+});
+loadLocalInstallers();
+
+function openLocalInstallerModal(row) {
+  const m = document.getElementById('li-modal');
+  if (!m) return;
+  document.getElementById('li-modal-title').textContent = row ? 'Edit local installer' : 'Add local installer';
+  document.getElementById('li-edit-id').value       = row ? row.id : '';
+  document.getElementById('li-name').value          = row ? (row.name || '') : '';
+  document.getElementById('li-path').value          = row ? (row.path || '') : '';
+  document.getElementById('li-framework').value     = row ? (row.framework_hint || '') : '';
+  document.getElementById('li-args').value          = row ? (row.silent_args_override || '') : '';
+  document.getElementById('li-codes').value         = row ? (row.expected_exit_codes || '0,3010') : '0,3010';
+  document.getElementById('li-notes').value         = row ? (row.notes || '') : '';
+  m.classList.add('is-open');
+  document.body.style.overflow = 'hidden';
+}
+document.getElementById('li-modal')?.addEventListener('click', e => {
+  if (e.target.id === 'li-modal' || e.target.closest('[data-close]')) {
+    document.getElementById('li-modal').classList.remove('is-open');
+    if (!document.querySelector('.modal-backdrop.is-open')) document.body.style.overflow = '';
+  }
+});
+document.getElementById('new-li-btn')?.addEventListener('click', () => openLocalInstallerModal(null));
+
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const a = btn.dataset.action;
+  if (a === 'li-edit') {
+    try {
+      const row = JSON.parse(btn.dataset.row);
+      openLocalInstallerModal(row);
+    } catch (_) {}
+  }
+  if (a === 'li-delete') {
+    if (!confirm('Delete local installer "' + btn.dataset.name + '"? Agents will no longer be able to launch it.')) return;
+    try {
+      const res = await fetch(API + '?action=delete_local_installer', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: Number(btn.dataset.id) }), credentials: 'same-origin',
+      });
+      const json = await res.json();
+      if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
+      toast('Installer removed', 'ok');
+      loadLocalInstallers();
+    } catch (e) { toast(e.message, 'err'); }
+  }
+});
+
+document.getElementById('li-save-btn')?.addEventListener('click', async () => {
+  const id = document.getElementById('li-edit-id').value;
+  const payload = {
+    id: id ? Number(id) : 0,
+    name:                 document.getElementById('li-name').value.trim(),
+    path:                 document.getElementById('li-path').value.trim(),
+    framework_hint:       document.getElementById('li-framework').value,
+    silent_args_override: document.getElementById('li-args').value.trim(),
+    expected_exit_codes:  document.getElementById('li-codes').value.trim() || '0,3010',
+    notes:                document.getElementById('li-notes').value.trim(),
+  };
+  if (!payload.name || !payload.path) {
+    toast('Name and path are required', 'err');
+    return;
+  }
+  try {
+    const res = await fetch(API + '?action=save_local_installer', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload), credentials: 'same-origin',
+    });
+    const json = await res.json();
+    if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
+    toast('Installer saved', 'ok');
+    document.getElementById('li-modal').classList.remove('is-open');
+    if (!document.querySelector('.modal-backdrop.is-open')) document.body.style.overflow = '';
+    loadLocalInstallers();
+  } catch (e) { toast(e.message, 'err'); }
+});
+
+document.getElementById('save-li-prefixes-btn')?.addEventListener('click', async () => {
+  const payload = { local_installer_allowed_prefixes: document.getElementById('li-allowed-prefixes').value };
+  try {
+    const res = await fetch(API + '?action=set_settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload), credentials: 'same-origin',
+    });
+    const json = await res.json();
+    if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
+    toast('Allowed prefixes saved', 'ok');
   } catch (e) { toast(e.message, 'err'); }
 });
 

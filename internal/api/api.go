@@ -102,6 +102,9 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case method == "GET" && action == "agent_config":
 		s.agentConfig(w, r)
 		return
+	case method == "GET" && action == "agent_local_installer":
+		s.agentLocalInstaller(w, r)
+		return
 	// ---- auth endpoints (no session required) --------------------------
 	case method == "GET" && action == "auth_state":
 		s.authState(w, r)
@@ -174,6 +177,12 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.cveSummary(w, r)
 	case method == "POST" && action == "rescan_cves":
 		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.rescanCVEs)
+	case method == "GET" && action == "list_local_installers":
+		s.listLocalInstallers(w, r)
+	case method == "POST" && action == "save_local_installer":
+		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.saveLocalInstaller)
+	case method == "POST" && action == "delete_local_installer":
+		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.deleteLocalInstaller)
 	case method == "GET" && action == "vendor_versions":
 		s.vendorVersions(w, r)
 	case method == "GET" && action == "reports_summary":
@@ -608,6 +617,42 @@ func (s *Server) agentConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+// agentLocalInstaller returns one local_installers row so the agent
+// can resolve a local_install task to its (path, framework, silent
+// args, expected codes). TOFU-token authenticated.
+func (s *Server) agentLocalInstaller(w http.ResponseWriter, r *http.Request) {
+	hostname := s.normalizeHost(r.URL.Query().Get("hostname"))
+	if hostname == "" {
+		writeJSON(w, 400, map[string]string{"error": "Missing hostname"})
+		return
+	}
+	if _, ok := s.authAgent(w, r, hostname); !ok {
+		return
+	}
+	idStr := r.URL.Query().Get("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		writeJSON(w, 400, map[string]string{"error": "Missing or invalid id"})
+		return
+	}
+	li, err := s.DB.GetLocalInstaller(id)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if li == nil {
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	// Also include the allowed-prefixes setting so the agent can enforce
+	// whitelist locally (defence in depth: server writes into the field
+	// too when admins save a row).
+	writeJSON(w, 200, map[string]any{
+		"installer":         li,
+		"allowed_prefixes":  s.DB.Setting("local_installer_allowed_prefixes", ""),
+	})
+}
+
 func (s *Server) taskResult(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		TaskID   int64  `json:"task_id"`
@@ -1012,6 +1057,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		"full_scan": true,
 		"choco_install": true, "choco_upgrade": true,
 		"choco_upgrade_all": true, "choco_uninstall": true,
+		"local_install": true,
 	}
 	if hostname == "" || !valid[body.Type] {
 		writeJSON(w, 400, map[string]string{"error": "Invalid input"})
@@ -1184,6 +1230,79 @@ func (s *Server) cveSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, sum)
+}
+
+// -- Local-installer CRUD (1.7.1) -----------------------------------------
+
+func (s *Server) listLocalInstallers(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.DB.ListLocalInstallers()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if rows == nil {
+		rows = []db.LocalInstaller{}
+	}
+	writeJSON(w, 200, rows)
+}
+
+func (s *Server) saveLocalInstaller(w http.ResponseWriter, r *http.Request) {
+	var body db.LocalInstaller
+	if err := decode(r, &body); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad json"})
+		return
+	}
+	body.Name = strings.TrimSpace(body.Name)
+	body.Path = strings.TrimSpace(body.Path)
+	if body.Name == "" || body.Path == "" {
+		writeJSON(w, 400, map[string]string{"error": "name and path are required"})
+		return
+	}
+	if body.ExpectedExitCodes == "" {
+		body.ExpectedExitCodes = "0,3010"
+	}
+	// Basic path shape check: must be a UNC path or an absolute Windows
+	// path. Prevents admins saving obviously bogus entries that the agent
+	// would just reject.
+	if !(strings.HasPrefix(body.Path, `\\`) || looksLikeWindowsPath(body.Path)) {
+		writeJSON(w, 400, map[string]string{"error": "path must be a UNC share (\\\\server\\share\\...) or an absolute Windows path"})
+		return
+	}
+	id, err := s.DB.UpsertLocalInstaller(body)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "status": "ok"})
+}
+
+func (s *Server) deleteLocalInstaller(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID int64 `json:"id"`
+	}
+	if err := decode(r, &body); err != nil || body.ID <= 0 {
+		writeJSON(w, 400, map[string]string{"error": "Missing id"})
+		return
+	}
+	if err := s.DB.DeleteLocalInstaller(body.ID); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// looksLikeWindowsPath accepts C:\Something\... style. Does not resolve
+// the filesystem — just pattern-matches the leading drive letter so a
+// blatantly malformed value is rejected at save time.
+func looksLikeWindowsPath(p string) bool {
+	if len(p) < 3 {
+		return false
+	}
+	c := p[0]
+	if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
+		return false
+	}
+	return p[1] == ':' && (p[2] == '\\' || p[2] == '/')
 }
 
 // vendorVersions returns the entire vendor-API cache as JSON, for the

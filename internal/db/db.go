@@ -341,6 +341,24 @@ var migrations = []struct {
 	{14, "Add chocolatey task types", []string{
 		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single','full_scan','choco_install','choco_upgrade','choco_upgrade_all','choco_uninstall') NOT NULL DEFAULT 'check'`,
 	}},
+	{15, "Local-installer catalog + local_install task type", []string{
+		`CREATE TABLE IF NOT EXISTS local_installers (
+			id INT NOT NULL AUTO_INCREMENT,
+			name VARCHAR(255) NOT NULL,
+			path VARCHAR(1000) NOT NULL,
+			framework_hint VARCHAR(40) NULL,
+			silent_args_override VARCHAR(500) NULL,
+			expected_exit_codes VARCHAR(120) NOT NULL DEFAULT '0,3010',
+			notes VARCHAR(1000) NULL,
+			created_by VARCHAR(100) NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_li_name (name)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single','full_scan','choco_install','choco_upgrade','choco_upgrade_all','choco_uninstall','local_install') NOT NULL DEFAULT 'check'`,
+		`INSERT IGNORE INTO settings (key_name, value) VALUES
+			('local_installer_allowed_prefixes', '')`,
+	}},
 }
 
 func (d *DB) Migrate() error {
@@ -623,6 +641,44 @@ var migrationsSQLite = []struct {
 		`DROP TABLE tasks`,
 		`ALTER TABLE tasks_new RENAME TO tasks`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_host_status ON tasks(hostname, status)`,
+	}},
+	{15, "Local-installer catalog + local_install task type", []string{
+		`CREATE TABLE IF NOT EXISTS local_installers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			path TEXT NOT NULL,
+			framework_hint TEXT,
+			silent_args_override TEXT,
+			expected_exit_codes TEXT NOT NULL DEFAULT '0,3010',
+			notes TEXT,
+			created_by TEXT,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS tasks_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL,
+			type TEXT NOT NULL DEFAULT 'check' CHECK (type IN (
+				'upgrade_all','upgrade_package','install_package','uninstall_package',
+				'check','uninstall_self','windows_update_all','windows_update_single',
+				'full_scan',
+				'choco_install','choco_upgrade','choco_upgrade_all','choco_uninstall',
+				'local_install')),
+			package_id TEXT,
+			package_name TEXT,
+			package_version TEXT,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','delivered','completed','failed')),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			delivered_at DATETIME,
+			completed_at DATETIME,
+			result TEXT
+		)`,
+		`INSERT INTO tasks_new (id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result)
+		 SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result FROM tasks`,
+		`DROP TABLE tasks`,
+		`ALTER TABLE tasks_new RENAME TO tasks`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_host_status ON tasks(hostname, status)`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES
+			('local_installer_allowed_prefixes', '')`,
 	}},
 }
 
@@ -1945,6 +2001,90 @@ func (d *DB) GetKEVSet() (map[string]bool, error) {
 		out[id] = true
 	}
 	return out, rows.Err()
+}
+
+// -- Local installer catalog (1.7.1) --------------------------------------
+
+// LocalInstaller describes one admin-curated MSI/EXE staged on a local
+// path or UNC share. Stored in the local_installers table.
+type LocalInstaller struct {
+	ID                 int64     `json:"id"`
+	Name               string    `json:"name"`
+	Path               string    `json:"path"`
+	FrameworkHint      string    `json:"framework_hint,omitempty"`
+	SilentArgsOverride string    `json:"silent_args_override,omitempty"`
+	ExpectedExitCodes  string    `json:"expected_exit_codes"` // "0,3010"
+	Notes              string    `json:"notes,omitempty"`
+	CreatedBy          string    `json:"created_by,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+// ListLocalInstallers returns every row, sorted alphabetically by name.
+func (d *DB) ListLocalInstallers() ([]LocalInstaller, error) {
+	rows, err := d.sql.Query(
+		"SELECT id, name, path, COALESCE(framework_hint,''), COALESCE(silent_args_override,''), expected_exit_codes, COALESCE(notes,''), COALESCE(created_by,''), created_at FROM local_installers ORDER BY LOWER(name)")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LocalInstaller
+	for rows.Next() {
+		var li LocalInstaller
+		if err := rows.Scan(&li.ID, &li.Name, &li.Path, &li.FrameworkHint, &li.SilentArgsOverride,
+			&li.ExpectedExitCodes, &li.Notes, &li.CreatedBy, &li.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, li)
+	}
+	return out, rows.Err()
+}
+
+// GetLocalInstaller loads a single row by id.
+func (d *DB) GetLocalInstaller(id int64) (*LocalInstaller, error) {
+	row := d.sql.QueryRow(
+		"SELECT id, name, path, COALESCE(framework_hint,''), COALESCE(silent_args_override,''), expected_exit_codes, COALESCE(notes,''), COALESCE(created_by,''), created_at FROM local_installers WHERE id=?",
+		id)
+	var li LocalInstaller
+	if err := row.Scan(&li.ID, &li.Name, &li.Path, &li.FrameworkHint, &li.SilentArgsOverride,
+		&li.ExpectedExitCodes, &li.Notes, &li.CreatedBy, &li.CreatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &li, nil
+}
+
+// UpsertLocalInstaller inserts or updates by name. Returns the row id.
+func (d *DB) UpsertLocalInstaller(li LocalInstaller) (int64, error) {
+	// Check if a row with this name exists; update it if so, insert otherwise.
+	var existing int64
+	err := d.sql.QueryRow("SELECT id FROM local_installers WHERE name=?", li.Name).Scan(&existing)
+	if err == sql.ErrNoRows {
+		res, err := d.sql.Exec(
+			"INSERT INTO local_installers (name, path, framework_hint, silent_args_override, expected_exit_codes, notes, created_by) VALUES (?,?,?,?,?,?,?)",
+			li.Name, li.Path, nullIfEmpty(li.FrameworkHint), nullIfEmpty(li.SilentArgsOverride),
+			li.ExpectedExitCodes, nullIfEmpty(li.Notes), nullIfEmpty(li.CreatedBy))
+		if err != nil {
+			return 0, err
+		}
+		id, _ := res.LastInsertId()
+		return id, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	_, err = d.sql.Exec(
+		"UPDATE local_installers SET path=?, framework_hint=?, silent_args_override=?, expected_exit_codes=?, notes=? WHERE id=?",
+		li.Path, nullIfEmpty(li.FrameworkHint), nullIfEmpty(li.SilentArgsOverride),
+		li.ExpectedExitCodes, nullIfEmpty(li.Notes), existing)
+	return existing, err
+}
+
+// DeleteLocalInstaller removes one row by id.
+func (d *DB) DeleteLocalInstaller(id int64) error {
+	_, err := d.sql.Exec("DELETE FROM local_installers WHERE id=?", id)
+	return err
 }
 
 // -- Vendor version cache (1.6.1 cascade) ---------------------------------

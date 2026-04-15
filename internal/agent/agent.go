@@ -585,6 +585,12 @@ func (r *Runtime) RunTasks(tasks []TaskRequest) {
 				out, code = choco.RunUninstall(stripChocoPrefix(t.PackageID))
 				mutated = true
 			}
+		case "local_install":
+			// package_id carries the local_installers.id as a string.
+			out, code = r.runLocalInstall(t.PackageID)
+			if code == 0 || code == 3010 {
+				mutated = true
+			}
 		case "check":
 			out, code = "ok", 0
 		case "full_scan":

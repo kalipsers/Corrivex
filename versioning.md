@@ -55,6 +55,62 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.7.1 — Local-file installer with framework detection
+
+**Minor** — new admin-curated install path that works for anything
+winget and Chocolatey don't cover: MSIs and EXEs staged on a local
+disk path or UNC share. Agent reads the file header, identifies the
+installer framework (InnoSetup / NSIS / MSI / Squirrel / WiX Burn /
+InstallShield / Advanced Installer), and runs the matching silent
+flag set. Admins can override per-installer when a vendor used a
+non-standard packaging.
+
+- New `internal/localinstall` package:
+  - `Detect(path)` → inspects the PE header + string table to
+    identify the installer framework. MSI is recognised by extension
+    alone. Returns a Framework enum + the canonical silent args.
+  - `Run(path, argsOverride, expectedCodes)` → shell-outs with the
+    right silent args, waits for completion, returns combined output
+    + exit code.
+- Frameworks covered with built-in silent-arg templates:
+  | Framework | Flags |
+  |---|---|
+  | `msi` | `msiexec /i <path> /qn /norestart` |
+  | `inno` | `<path> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART` |
+  | `nsis` | `<path> /S` |
+  | `wix_burn` | `<path> /quiet /norestart` |
+  | `squirrel` | `<path> --silent` |
+  | `installshield` | `<path> /s /v"/qn /norestart"` |
+  | `advanced_installer` | falls back to MSI flags (MSI is bundled) |
+  | `unknown` | refuses to run unless admin overrode the args |
+- Schema migration 15:
+  - New `local_installers` table: id, name, path (UNC or local),
+    framework_hint (optional), silent_args_override (optional),
+    expected_exit_codes (comma-separated ints; defaults to "0,3010"),
+    notes, created_at, created_by.
+  - `tasks.type` enum extended with `local_install`. SQLite
+    table-rebuild same pattern as 13 and 14.
+- New admin-gated API: CRUD under
+  `/api/?action=list_local_installers`,
+  `/api/?action=add_local_installer`,
+  `/api/?action=delete_local_installer`.
+- New task type `local_install` — payload field `package_id`
+  carries the `local_installers.id` as a string. Agent loads the
+  row via an existing `agent_config` variant call (not exposed in
+  a separate endpoint to keep the agent surface minimal), runs
+  `localinstall.Run`, reports exit code.
+- Settings → Local installers UI card with add / edit / delete, and
+  a device-modal action "Install local…" that enumerates the catalog
+  and queues the task.
+- Path-whitelist enforcement: path must start with a UNC share
+  (`\\server\share\...`) or one of the configured allowed prefixes
+  in the `local_installer_allowed_prefixes` setting (default empty,
+  so UNC-only until configured). No `C:\Windows\*`, no `%TEMP%\*`.
+
+No SMB authentication yet — 1.7.2 adds that. A 1.7.1 agent can
+already reach a UNC share if it already has an authenticated
+Windows session or if the share allows anonymous reads.
+
 ### 1.7.0 — Chocolatey as a second package manager
 
 **Minor** — adds a full second package manager alongside winget, with
