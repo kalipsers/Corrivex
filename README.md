@@ -46,6 +46,15 @@ real-time dashboard, role-based admin UI, and a single-binary agent.
   (single-file, perfect for Windows-hosted controllers).
 - **Optional encoding-correct PowerShell**: every PS invocation forces
   UTF-8 so non-ASCII (Slovak, Czech, German, Polish, …) round-trips cleanly.
+- **CVE scanning (1.4.0+)**: background scanner queries OSV + NVD and the
+  CISA KEV catalog on a 6-hour cycle. Per-host Security modal lists every
+  CVE affecting the installed software; winget upgrade rows show inline
+  chips when upgrading would fix a known vuln.
+- **Reports (1.5.0+)**: a dedicated dashboard tab exports three data sets
+  (**Installed software**, **Local administrators**, **CVE findings**) in
+  five formats — CSV, JSON, HTML, PDF, and a per-host ZIP bundle of PDFs
+  — at fleet or single-host scope. See the [Reports](#reports) section
+  below for the full matrix.
 
 ## Repository layout
 
@@ -61,6 +70,8 @@ real-time dashboard, role-based admin UI, and a single-binary agent.
 │   ├── db/              # MariaDB + SQLite store, migrations, queries
 │   ├── events/          # in-process pub/sub fed to dashboard websockets
 │   ├── hub/             # per-host agent connection registry
+│   ├── cve/             # CVE scanner (OSV + NVD + CISA KEV), winget→CPE map
+│   ├── report/          # CSV / JSON / HTML / PDF / ZIP export encoders
 │   ├── web/             # dashboard HTML render + login page
 │   ├── winget/          # winget shell-out + auto-install
 │   └── winupdate/       # Microsoft.Update.Session COM probes
@@ -398,6 +409,78 @@ The release workflow validates that the tag matches `internal/version/version.go
 Track progress in the **Actions** tab of the GitHub repo. The release lands at
 `https://github.com/<owner>/Corrivex/releases/tag/v1.2.3`, the image at
 `<DOCKERHUB_USERNAME>/corrivex:1.2.3` (and `:latest`).
+
+## Reports
+
+A dedicated top-level **Reports** dashboard tab surfaces three core data
+sets in five output formats. All endpoints are session-gated (operator
+role or above); the **Rescan** CVE action requires admin.
+
+### Data sets
+
+| Type | Source | Scope |
+|---|---|---|
+| `installed_software` | per-host winget inventory + history | fleet or single host |
+| `local_admins` | `Get-LocalGroupMember` on every full scan | fleet (use the CSV to filter per host) |
+| `cve_findings` | `installed_software` × `cve_cache` × CISA KEV | fleet or single host |
+
+### Formats
+
+| Format | Notes |
+|---|---|
+| **CSV** | UTF-8 with BOM so Excel reads it correctly on Windows. Raw rows, no summary band. |
+| **JSON** | Pretty-printed, trivially parseable by external tools. |
+| **HTML** | Standalone document, Swiss-modernist layout (Lexend + Source Sans 3, Trust-&-Authority palette on pure white). Has a tuned `@media print` stylesheet — users can Ctrl+P → Save as PDF in any browser if they prefer the web typography. |
+| **PDF** | Server-generated via `johnfercher/maroto` (pure Go, no headless Chromium). Landscape A4 for `installed_software` and `cve_findings`, portrait for `local_admins`. UTF-8-safe — Slovak/Czech/Polish/German diacritics all render (custom embedded Go Regular/Bold + GoMono Regular/Bold TTF families). |
+| **ZIP (per-host PDFs)** | Fleet-wide only. Server partitions rows by host, renders one PDF per host, and streams a zip bundle with `README.txt` (scope/date/build/host count) and `manifest.json` (host → filename → rows → bytes). Hosts with zero rows still get a courtesy "no findings" PDF so the archive is a complete fleet snapshot. |
+
+### API
+
+```
+GET /api/?action=report&type=TYPE&format=FORMAT[&host=HOST]
+GET /api/?action=reports_summary
+```
+
+- `type` — `installed_software` | `local_admins` | `cve_findings`
+- `format` — `csv` | `json` | `html` | `pdf` | `pdfzip`
+- `host` — optional, restricts to a single hostname
+  (`installed_software` and `cve_findings` only).
+  Omitted / empty means the entire fleet.
+- `format=pdfzip` only makes sense without `host` — the dashboard button
+  auto-disables when a single host is selected.
+
+Download files are named
+`corrivex_<type>_<scope>_<YYYYMMDD>.<ext>`; the per-host ZIP uses
+`scope=per_host`. `Content-Disposition: attachment` for downloads;
+`inline` for HTML so the browser renders it for `Ctrl+P`.
+
+`reports_summary` returns the four counters shown on the Reports tab's
+top cards:
+
+```json
+{
+  "devices": 42,
+  "installed_packages": 2610,
+  "distinct_local_admins": 17,
+  "open_cves": 58
+}
+```
+
+### PDF design
+
+Layout follows Swiss Modernism 2.0 (grid-based, mathematical spacing,
+monochrome + single accent). Cover block carries a brand strip, title,
+scope/date/build metadata; summary band with KV counters; alternating-
+row data table with dash-break for narrow cells; per-page footer
+`Corrivex | page n / N` plus the report title. Fonts are embedded Go
+Regular/Bold (proportional) and GoMono Regular/Bold (monospace) — full
+Unicode cmap so non-ASCII usernames and package names render correctly.
+
+### No extra dependencies
+
+PDF generation runs in-process with `johnfercher/maroto/v2` (pure Go,
+no CGo). No headless browser, no sidecar container, no external fonts
+downloaded at runtime. Everything needed ships with the binary.
 
 ## How it talks to itself (wire protocol)
 
