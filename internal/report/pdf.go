@@ -16,11 +16,33 @@ import (
 	"github.com/johnfercher/maroto/v2/pkg/consts/orientation"
 	"github.com/johnfercher/maroto/v2/pkg/consts/pagesize"
 	"github.com/johnfercher/maroto/v2/pkg/core"
+	"github.com/johnfercher/maroto/v2/pkg/core/entity"
 	"github.com/johnfercher/maroto/v2/pkg/props"
+
+	gobold "golang.org/x/image/font/gofont/gobold"
+	gomono "golang.org/x/image/font/gofont/gomono"
+	gomonobold "golang.org/x/image/font/gofont/gomonobold"
+	goregular "golang.org/x/image/font/gofont/goregular"
 
 	"github.com/markov/corrivex/internal/db"
 	"github.com/markov/corrivex/internal/version"
 )
+
+// Unicode-capable font families registered with Maroto. The Go font family
+// has a wide cmap (Latin + diacritics + Cyrillic + Greek + common symbols),
+// so user data with Slovak / Czech / Polish diacritics, or template
+// characters like · — …, renders correctly without any preprocessing.
+const (
+	fontProp = "Go"     // proportional family (replaces Helvetica)
+	fontMono = "GoMono" // monospace family (replaces Courier)
+)
+
+var customFonts = []*entity.CustomFont{
+	{Family: fontProp, Style: fontstyle.Normal, Bytes: goregular.TTF},
+	{Family: fontProp, Style: fontstyle.Bold, Bytes: gobold.TTF},
+	{Family: fontMono, Style: fontstyle.Normal, Bytes: gomono.TTF},
+	{Family: fontMono, Style: fontstyle.Bold, Bytes: gomonobold.TTF},
+}
 
 // Brand palette — reuses the Trust & Authority values from the HTML
 // template so screen and paper share a visual language.
@@ -68,12 +90,13 @@ func buildPDF(kind string, rows any, scope, user string) ([]byte, error) {
 		WithBottomMargin(18).
 		WithLeftMargin(14).
 		WithRightMargin(14).
-		WithDefaultFont(&props.Font{Family: "Helvetica", Size: 9, Color: &inkColor}).
-		WithAuthor("Corrivex", false).
-		WithCreator("Corrivex v"+version.Version, false).
-		WithTitle(title, false).
+		WithCustomFonts(customFonts).
+		WithDefaultFont(&props.Font{Family: fontProp, Size: 9, Color: &inkColor}).
+		WithAuthor("Corrivex", true).
+		WithCreator("Corrivex v"+version.Version, true).
+		WithTitle(title, true).
 		WithPageNumber(props.PageNumber{
-			Pattern: "Corrivex · page {current} / {total}",
+			Pattern: "Corrivex | page {current} / {total}",
 			Place:   props.Bottom,
 			Size:    8,
 			Color:   &mutedColor,
@@ -199,13 +222,13 @@ func renderSoftwareTable(m core.Maroto, rows []db.InstalledSoftware) {
 			text.NewCol(2, truncate(r.Hostname, 26),
 				props.Text{Size: 8, Style: fontstyle.Bold, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
 			text.NewCol(4, truncate(r.PackageID, 56),
-				props.Text{Size: 7, Family: "Courier", Color: &inkColor2, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+				props.Text{Size: 7, Family: fontMono, Color: &inkColor2, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
 			text.NewCol(3, truncate(orDefault(r.PackageName, "—"), 42),
 				props.Text{Size: 8, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
 			text.NewCol(2, truncate(orDefault(r.Version, "—"), 24),
-				props.Text{Size: 7, Family: "Courier", Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+				props.Text{Size: 7, Family: fontMono, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
 			text.NewCol(1, r.LastSeen.UTC().Format("2006-01-02"),
-				props.Text{Size: 7, Family: "Courier", Color: &mutedColor, Left: 2, Top: 1.5}),
+				props.Text{Size: 7, Family: fontMono, Color: &mutedColor, Left: 2, Top: 1.5}),
 		).WithStyle(&props.Cell{BackgroundColor: bg})
 	}
 }
@@ -232,7 +255,7 @@ func renderAdminsTable(m core.Maroto, rows []db.LocalAdminEntry) {
 			text.NewCol(2, truncate(orDefault(r.Domain, "—"), 22),
 				props.Text{Size: 7, Color: &mutedColor, Left: 2, Top: 1.5}),
 			text.NewCol(4, truncate(r.AccountName, 40),
-				props.Text{Size: 7, Family: "Courier", Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+				props.Text{Size: 7, Family: fontMono, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
 			text.NewCol(2, truncate(orDefault(r.AccountType, "—"), 20),
 				props.Text{Size: 7, Color: &mutedColor, Left: 2, Top: 1.5}),
 			text.NewCol(1, enabled, props.Text{Size: 7, Color: enabledColor, Left: 2, Top: 1.5}),
@@ -259,15 +282,15 @@ func renderCVETable(m core.Maroto, rows []db.CVEHostFinding) {
 			text.NewCol(2, truncate(r.Hostname, 24),
 				props.Text{Size: 7, Style: fontstyle.Bold, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
 			text.NewCol(2, truncate(r.CVEID, 22),
-				props.Text{Size: 7, Family: "Courier", Color: &inkColor2, Left: 2, Top: 1.5}),
+				props.Text{Size: 7, Family: fontMono, Color: &inkColor2, Left: 2, Top: 1.5}),
 			text.NewCol(1, sevLabel,
 				props.Text{Size: 6, Style: fontstyle.Bold, Color: sevColor, Left: 2, Top: 1.5}),
 			text.NewCol(3, truncate(orDefault(r.PackageName, r.PackageID), 38),
 				props.Text{Size: 7, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
 			text.NewCol(1, truncate(orDefault(r.Version, "—"), 14),
-				props.Text{Size: 6, Family: "Courier", Left: 2, Top: 1.5}),
+				props.Text{Size: 6, Family: fontMono, Left: 2, Top: 1.5}),
 			text.NewCol(1, truncate(orDefault(r.FixedIn, "—"), 14),
-				props.Text{Size: 6, Family: "Courier", Color: &mutedColor, Left: 2, Top: 1.5}),
+				props.Text{Size: 6, Family: fontMono, Color: &mutedColor, Left: 2, Top: 1.5}),
 			text.NewCol(2, truncate(r.Summary, 110),
 				props.Text{Size: 6, Color: &inkColor2, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
 		).WithStyle(&props.Cell{BackgroundColor: bg})

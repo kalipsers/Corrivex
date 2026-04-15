@@ -55,6 +55,33 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.5.4 — UTF-8 fonts in PDFs (fix mojibake in reports)
+
+**Patch**
+
+Live 1.5.3 PDF output rendered `·` as `Â·` and `—` as `â€"` —
+classic UTF-8-bytes-interpreted-as-Latin-1 mojibake. Root cause:
+Maroto's default built-in Helvetica is a 14-core PDF font with a
+Latin-1 codepage. Anything outside Win-1252 (em-dash, ellipsis,
+middle-dot, and crucially — diacritics in usernames) double-encoded.
+
+- Embedded Go's own TrueType font bundle
+  (`golang.org/x/image/font/gofont/{goregular,gobold,gomono,gomonobold}`)
+  as custom Maroto fonts. Two families registered: `Go` (proportional,
+  normal + bold) replaces Helvetica, `GoMono` (monospaced, normal +
+  bold) replaces Courier.
+- These are full TTF files with Unicode cmap coverage across Latin,
+  Cyrillic, Greek and common symbols, so Slovak/Czech/Polish
+  usernames (á, č, ř, ž, ł, ó, ä, ö, ü…) render correctly without
+  any per-string preprocessing.
+- Template strings cleaned up as well — `·` → `|`, `—` → `-`,
+  `…` → `...` in footer pattern + placeholder cells. Defence in depth
+  so the layout still looks sane if a custom font ever fails to load.
+- File size impact: embedding 4 fonts adds ~900 kB to the binary but
+  only adds ~60 kB per PDF (fonts are referenced once, subset embedded
+  into the PDF). The fleet ZIP for a 100-host inventory still fits
+  well under 10 MB.
+
 ### 1.5.3 — Fix PDF table overflow (landscape + truncate + widths)
 
 **Patch**
