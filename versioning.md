@@ -55,6 +55,35 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.4.2 — Drop distro-wrapped OSV entries + version-range filter
+
+**Patch**
+
+Shipping the feature to a live host surfaced two classes of false
+positives from OSV:
+
+- **Distro-wrapped IDs** — `UBUNTU-CVE-*`, `DEBIAN-CVE-*`, `RHSA-*`,
+  `ALAS-*`, `SUSE-SU-*`, `USN-*`, `DSA-*` etc. These are Linux
+  distribution tracker entries that reuse a product name but describe
+  distro-packaged versions with distro-specific version strings
+  (`0.74-1ubuntu1`), often with no `fixed` event at all. They're
+  irrelevant to a winget/Windows-native install. `internal/cve/osv.go`
+  now drops them up front — the canonical `CVE-YYYY-NNNN` entry, if the
+  vulnerability is real, is separately indexed and still picked up.
+- **Unfiltered server-side matching** — OSV's `/v1/query` endpoint only
+  version-filters reliably when the request specifies an ecosystem
+  whose versioning scheme OSV understands. Corrivex passes winget IDs
+  with no ecosystem, so OSV was returning every PuTTY CVE ever
+  published — including 2020-era entries fixed in 0.74 — against a host
+  running 0.83. We now post-filter results against each entry's
+  `affected[].ranges[].events[]`: a CVE is only kept if the installed
+  version falls inside an `introduced…fixed` span (or
+  `introduced…last_affected`). The range matcher uses the existing
+  dotted-numeric `compareVer` with a string-compare fallback.
+- Entries with no usable range information (no `events` at all on any
+  range) are kept conservatively — better a rare false positive than
+  missing a genuinely-unbounded CVE.
+
 ### 1.4.1 — Security moved to its own modal + linkable CVE IDs
 
 **Patch**
