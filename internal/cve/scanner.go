@@ -181,6 +181,12 @@ func (s *Scanner) scanPass(ctx context.Context, force bool) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if !hasScannableVersion(k.Version) {
+			// Winget occasionally reports versions like ">" or "null" for
+			// apps that don't expose a parseable number. Skip them — we
+			// can't range-match against garbage.
+			continue
+		}
 		cves, src, err := s.query(ctx, k.PackageID, k.Version)
 		if err != nil {
 			log.Printf("cve: query %s@%s: %v", k.PackageID, k.Version, err)
@@ -247,6 +253,17 @@ func (s *Scanner) query(ctx context.Context, pkgID, version string) ([]db.CVEEnt
 		return entries, "nvd", nil
 	}
 	return nil, "none", nil
+}
+
+// hasScannableVersion returns true if `v` contains at least one digit —
+// i.e. looks like something a CVE range could be matched against.
+func hasScannableVersion(v string) bool {
+	for i := 0; i < len(v); i++ {
+		if v[i] >= '0' && v[i] <= '9' {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Scanner) refreshKEV(ctx context.Context) error {

@@ -61,6 +61,8 @@ var wingetToCPE = map[string]CPE{
 	"Rustlang.Rustup":                   {"rust-lang", "rust"},
 	"Oracle.JDK.17":                     {"oracle", "jdk"},
 	"Oracle.JDK.21":                     {"oracle", "jdk"},
+	"Oracle.JavaRuntimeEnvironment":     {"oracle", "jre"},
+	"Oracle.JavaRuntimeEnvironment.8":   {"oracle", "jre"},
 	"EclipseAdoptium.Temurin.17.JDK":    {"eclipse", "temurin"},
 	"EclipseAdoptium.Temurin.21.JDK":    {"eclipse", "temurin"},
 	"Microsoft.DotNet.SDK.8":            {"microsoft", ".net"},
@@ -89,7 +91,7 @@ var wingetToCPE = map[string]CPE{
 	"GitHub.cli":                        {"github", "cli"},
 	"Docker.DockerDesktop":              {"docker", "docker_desktop"},
 	"PuTTY.PuTTY":                       {"putty", "putty"},
-	"WinSCP.WinSCP":                     {"martin_prikryl", "winscp"},
+	"WinSCP.WinSCP":                     {"winscp", "winscp"},
 	"Mobatek.MobaXterm":                 {"mobatek", "mobaxterm"},
 	"Wireshark.Wireshark":               {"wireshark", "wireshark"},
 
@@ -127,6 +129,8 @@ var wingetToCPE = map[string]CPE{
 	"Dropbox.Dropbox":                   {"dropbox", "dropbox"},
 	"Google.Drive":                      {"google", "drive"},
 	"Microsoft.OneDrive":                {"microsoft", "onedrive"},
+	"Nextcloud.NextcloudDesktop":        {"nextcloud", "desktop"},
+	"ownCloud.ownCloudDesktop":          {"owncloud", "desktop"},
 }
 
 var fuzzyCleanup = regexp.MustCompile(`\.\d+(\.\d+)*$`)

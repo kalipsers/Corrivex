@@ -55,6 +55,32 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.4.4 — Correct curated winget→CPE mappings
+
+**Patch**
+
+Live testing exposed several entries in `internal/cve/mapper.go` that
+pointed at the wrong NVD vendor/product pair, silently hiding real
+findings:
+
+- `Oracle.JavaRuntimeEnvironment` → `oracle:jdk` was wrong; NVD tracks
+  the JRE under `oracle:jre` (451 entries, most of Java 8's CVE
+  backlog). Mapping corrected.
+- `WinSCP.WinSCP` → `martin_prikryl:winscp` was wrong; NVD uses
+  `winscp:winscp`.
+- `Nextcloud.NextcloudDesktop` was missing; added as `nextcloud:desktop`.
+- `Oracle.JDK.*` stays mapped to `oracle:jdk` (correct for the JDK
+  proper).
+- Version-quality guard: packages whose version string has no digits
+  (winget occasionally returns `>` or `null`) are skipped by the
+  scanner — they can't be meaningfully range-matched and would only
+  pollute the cache with "no findings" rows.
+
+Background: NVD's CPE vendor/product strings are idiosyncratic (Mozilla
+is `mozilla`, but Notepad++ is `notepad++`; Oracle's JRE is separate
+from its JDK). Admins can override any entry via the **Settings → CVE
+mappings** textarea without a rebuild.
+
 ### 1.4.3 — Fix invisible stat counters under prefers-reduced-motion
 
 **Patch**
