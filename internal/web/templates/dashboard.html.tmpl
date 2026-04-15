@@ -294,6 +294,47 @@ a:hover { color: var(--c-cta-hover); text-decoration: underline; }
   padding: 24px;
   animation: bdFade var(--d-med) var(--ease);
 }
+/* Responsive CVE grid used inside the Security modal. Columns shrink
+   gracefully on narrow viewports; the summary cell takes remaining space
+   and wraps its text without clipping. */
+.cve-grid {
+  display: grid;
+  grid-template-columns:
+    minmax(140px, max-content)   /* CVE      */
+    minmax(90px, max-content)    /* Severity */
+    minmax(160px, 1.2fr)         /* Package  */
+    minmax(110px, max-content)   /* Installed*/
+    minmax(110px, max-content)   /* Fixed    */
+    minmax(220px, 2.5fr);        /* Summary  */
+  border: 1px solid var(--c-border); border-radius: 10px; overflow: hidden;
+}
+.cve-row {
+  display: contents;
+}
+.cve-row > div {
+  padding: 12px 14px; border-bottom: 1px solid var(--c-border);
+  font-size: 13px; word-break: break-word; overflow-wrap: anywhere;
+}
+.cve-row.cve-head > div {
+  background: var(--c-surface-alt, #f8fafc); font-weight: 600; color: var(--c-muted);
+  font-size: 11px; letter-spacing: .05em; text-transform: uppercase;
+  border-bottom: 1px solid var(--c-border);
+}
+.cve-row:last-child > div { border-bottom: none; }
+.cve-summary { line-height: 1.5; }
+@media (max-width: 900px) {
+  .cve-grid { grid-template-columns: 1fr; }
+  .cve-row.cve-head { display: none; }
+  .cve-row > div { border-bottom: none; padding: 4px 14px; }
+  .cve-row > div:first-child { padding-top: 14px; }
+  .cve-row > div:last-child  { padding-bottom: 14px; border-bottom: 1px solid var(--c-border); }
+  .cve-row > div:nth-child(1)::before { content: 'CVE: ';       color: var(--c-muted); font-size: 11px; }
+  .cve-row > div:nth-child(2)::before { content: 'Severity: ';  color: var(--c-muted); font-size: 11px; }
+  .cve-row > div:nth-child(3)::before { content: 'Package: ';   color: var(--c-muted); font-size: 11px; }
+  .cve-row > div:nth-child(4)::before { content: 'Installed: '; color: var(--c-muted); font-size: 11px; }
+  .cve-row > div:nth-child(5)::before { content: 'Fixed in: ';  color: var(--c-muted); font-size: 11px; }
+  .cve-row > div:nth-child(6)::before { content: 'Summary: ';   color: var(--c-muted); font-size: 11px; }
+}
 .modal-backdrop.is-open { display: flex; }
 @keyframes bdFade { from { opacity: 0; } to { opacity: 1; } }
 .modal {
@@ -1057,7 +1098,45 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
         Force remove
       </button>
       <span style="flex:1"></span>
+      <button class="btn btn-ghost" id="open-security-btn" data-host="" title="Review CVEs affecting this host's installed software">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        Security <span class="chip" id="security-btn-count" style="display:none;margin-left:6px"></span>
+      </button>
       <button class="btn" data-close>Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Security (CVE) modal — wider than the device modal so the CVE table
+     breathes; opens on top of the device modal via the footer Security button. -->
+<div class="modal-backdrop" id="security-modal" role="dialog" aria-modal="true" aria-labelledby="security-modal-title" style="z-index:95">
+  <div class="modal" style="max-width:1200px;width:min(90vw,1200px)">
+    <div class="modal-hd">
+      <div>
+        <div class="modal-title" id="security-modal-title">Security</div>
+        <div class="modal-sub" id="security-modal-sub"></div>
+      </div>
+      <button class="icon-btn" data-close-security title="Close">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-bd">
+      <section class="section">
+        <div class="section-hd" style="flex-wrap:wrap;gap:10px">
+          <div class="section-title">Known CVEs for installed software</div>
+          <div style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-sm btn-ghost" id="rescan-cves-btn" data-admin-only title="Force the server to re-query OSV and NVD for every installed (package, version) pair now">Rescan</button>
+            <input type="search" class="input" id="cve-filter" placeholder="filter by CVE id or package" style="min-width:240px;font-size:12px;padding:6px 10px">
+          </div>
+        </div>
+        <div id="cve-list" data-host="" data-loaded="0">
+          <div class="card-empty">Loading…</div>
+        </div>
+      </section>
+    </div>
+    <div class="modal-ft">
+      <span class="sub" style="flex:1;font-size:12px">Click any CVE ID to open its public advisory page.</span>
+      <button class="btn" data-close-security>Close</button>
     </div>
   </div>
 </div>
@@ -1206,7 +1285,28 @@ function popLogPane() {
   log.scrollTop = log.scrollHeight;
 }
 modal.addEventListener('click', e => { if (e.target === modal || e.target.closest('[data-close]')) closeModal(); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+// Security modal — opens on top of the device modal via its footer button.
+const securityModal = document.getElementById('security-modal');
+if (securityModal) {
+  securityModal.addEventListener('click', e => {
+    if (e.target === securityModal || e.target.closest('[data-close-security]')) closeSecurityModal();
+  });
+}
+document.addEventListener('click', e => {
+  if (e.target.closest('#open-security-btn')) { e.preventDefault(); openSecurityModal(); }
+  if (e.target.closest('#rescan-cves-btn')) { e.preventDefault(); triggerCVERescan(); }
+});
+// CVE filter lives in the security modal — bind once (element is static HTML).
+const cveFilterEl = document.getElementById('cve-filter');
+if (cveFilterEl) cveFilterEl.addEventListener('input', applyCVEFilter);
+
+// Escape: close the topmost open modal first.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (securityModal && securityModal.classList.contains('is-open')) { closeSecurityModal(); return; }
+  closeModal();
+});
 
 async function viewDevice(host) {
   document.getElementById('device-modal-title').textContent = host;
@@ -1276,7 +1376,6 @@ function renderDeviceModal(pc) {
   html += '<button class="modal-tab' + (prevTab==='winget'?' is-active':'') + '" data-modal-tab="winget">Winget <span class="chip muted">' + pkgs.length + '</span></button>';
   html += '<button class="modal-tab' + (prevTab==='wu'?' is-active':'') + '" data-modal-tab="wu">Windows update <span class="chip muted">' + wu.length + '</span></button>';
   html += '<button class="modal-tab' + (prevTab==='installed'?' is-active':'') + '" data-modal-tab="installed">Installed software</button>';
-  html += '<button class="modal-tab' + (prevTab==='cve'?' is-active':'') + '" data-modal-tab="cve">Security <span class="chip" id="cve-tab-count" style="display:none"></span></button>';
   html += '</nav>';
 
   html += '<div class="modal-panel' + (prevTab==='overview'?' is-active':'') + '" data-modal-panel="overview">';
@@ -1425,21 +1524,6 @@ function renderDeviceModal(pc) {
   html += '</section>';
   html += '</div>'; // /installed
 
-  // ---- Security (CVE) panel (lazy-loaded) ------------------------------
-  html += '<div class="modal-panel' + (prevTab==='cve'?' is-active':'') + '" data-modal-panel="cve">';
-  html += '<section class="section">';
-  html += '<div class="section-hd"><div class="section-title">Known CVEs for installed software</div>';
-  if (window.IS_ADMIN) {
-    html += '<button class="btn btn-sm btn-ghost" id="rescan-cves-btn" title="Force the server to re-query OSV and NVD for every installed (package, version) pair now">Rescan</button>';
-  }
-  html += '<input type="search" class="input" id="cve-filter" placeholder="filter by CVE id or package" style="min-width:220px;font-size:12px;padding:6px 10px">';
-  html += '</div>';
-  html += '<div id="cve-list" data-host="' + escapeHTML(pc.hostname) + '" data-loaded="0">';
-  html += '<div class="card-empty">Click the tab to load…</div>';
-  html += '</div>';
-  html += '</section>';
-  html += '</div>'; // /cve
-
   // Recent tasks / users / admins — belong with Overview. Re-open the panel
   // (hidden unless Overview is selected) and drop them in.
   html += '<div class="modal-panel' + (prevTab==="overview"?' is-active':'') + '" data-modal-panel="overview">';
@@ -1497,58 +1581,91 @@ function bindModalTabs() {
       document.querySelectorAll('[data-modal-panel]').forEach(p => p.classList.toggle('is-active', p.dataset.modalPanel === key));
       // Lazy-load installed software list the first time the tab opens.
       if (key === 'installed') loadInstalledSoftware();
-      if (key === 'cve') loadCVEFindings();
     });
   });
-  // Also auto-load if the tab was already active when modal opened
-  // (happens if user re-opens a host whose previous active tab was installed).
+  // Also auto-load if the tab was already active when modal opened.
   if (document.querySelector('[data-modal-tab="installed"]')?.classList.contains('is-active')) {
     loadInstalledSoftware();
   }
-  if (document.querySelector('[data-modal-tab="cve"]')?.classList.contains('is-active')) {
-    loadCVEFindings();
-  }
-  // Filter inputs
+  // Filter input for installed software
   const f = document.getElementById('installed-filter');
   if (f) f.addEventListener('input', applyInstalledFilter);
-  const cf = document.getElementById('cve-filter');
-  if (cf) cf.addEventListener('input', applyCVEFilter);
-  const rb = document.getElementById('rescan-cves-btn');
-  if (rb) rb.addEventListener('click', triggerCVERescan);
 
-  // Always prefetch CVE findings on modal open — it's one API call and it
-  // drives both the Security-tab content and the per-row chips in the
-  // Winget tab. Also reset the cache so a newly-opened host doesn't see
-  // stale chips from the previously-open host.
+  // Always prefetch CVE findings on modal open — it drives both the footer
+  // Security button badge and the per-row chips in the Winget tab, even if
+  // the user never opens the Security modal.
   window.__cveByPkg = {};
   populateWingetCVEChips();
-  loadCVEFindings();
+  prefetchCVEForCurrentHost();
 }
 
 // Cache of CVE findings for the currently-open device modal. Keyed by
 // package_id → array of {cve_id, severity, kev, fixed_version}. Reset every
 // time a new modal opens.
 window.__cveByPkg = {};
+window.__cveFindings = [];
+window.__cveHost = '';
 
-async function loadCVEFindings() {
-  const wrap = document.getElementById('cve-list');
-  if (!wrap) return;
-  if (wrap.dataset.loaded === '1') return;
-  wrap.dataset.loaded = '1';
-  const host = wrap.dataset.host;
-  wrap.innerHTML = '<div class="card-empty">Loading…</div>';
+// prefetchCVEForCurrentHost populates the per-package chips + footer badge
+// without opening the Security modal. Runs once per device-modal open.
+async function prefetchCVEForCurrentHost() {
+  const titleEl = document.getElementById('device-modal-title');
+  const host = titleEl ? titleEl.textContent : '';
+  if (!host) return;
+  window.__cveHost = host;
   try {
     const res = await fetch(API + '?action=cve_findings&host=' + encodeURIComponent(host), { credentials: 'same-origin' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const findings = await res.json();
     window.__cveFindings = findings || [];
     indexCVEFindingsByPkg(findings || []);
-    renderCVEList(findings || []);
     populateWingetCVEChips();
-    updateCVETabCount(findings || []);
-  } catch (e) {
-    wrap.innerHTML = '<div class="card-empty">Failed to load: ' + escapeHTML(String(e)) + '</div>';
+    updateSecurityButtonBadge(findings || []);
+    // If the Security modal is already open for this host, re-render it too.
+    const secList = document.getElementById('cve-list');
+    if (secList && secList.dataset.host === host && secList.dataset.loaded === '1') {
+      renderCVEList(findings || []);
+    }
+  } catch (_) { /* best-effort */ }
+}
+
+function openSecurityModal() {
+  const host = window.__cveHost || (document.getElementById('device-modal-title')?.textContent || '');
+  if (!host) return;
+  const secModal = document.getElementById('security-modal');
+  if (!secModal) return;
+  document.getElementById('security-modal-title').textContent = host + ' — Security';
+  document.getElementById('security-modal-sub').textContent = 'CVEs affecting currently-installed software';
+  const wrap = document.getElementById('cve-list');
+  wrap.dataset.host = host;
+  wrap.dataset.loaded = '1';
+  renderCVEList(window.__cveFindings || []);
+  secModal.classList.add('is-open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeSecurityModal() {
+  const secModal = document.getElementById('security-modal');
+  if (!secModal) return;
+  secModal.classList.remove('is-open');
+  // Device modal may still be open — only unlock body scroll if nothing else is open.
+  if (!document.querySelector('.modal-backdrop.is-open')) {
+    document.body.style.overflow = '';
   }
+}
+
+function updateSecurityButtonBadge(findings) {
+  const chip = document.getElementById('security-btn-count');
+  if (!chip) return;
+  if (!findings.length) { chip.style.display = 'none'; chip.textContent = ''; return; }
+  const crit = findings.filter(f => (f.severity || '').toUpperCase() === 'CRITICAL').length;
+  const kev = findings.filter(f => f.kev).length;
+  chip.style.display = '';
+  chip.className = 'chip ' + (kev > 0 || crit > 0 ? 'danger' : 'warn');
+  let label = String(findings.length);
+  if (crit > 0) label += ' · ' + crit + ' crit';
+  if (kev > 0) label += ' · KEV';
+  chip.textContent = label;
 }
 
 function indexCVEFindingsByPkg(findings) {
@@ -1577,14 +1694,25 @@ function populateWingetCVEChips() {
   });
 }
 
-function updateCVETabCount(findings) {
-  const chip = document.getElementById('cve-tab-count');
-  if (!chip) return;
-  if (!findings.length) { chip.style.display = 'none'; chip.textContent = ''; return; }
-  const crit = findings.filter(f => (f.severity || '').toUpperCase() === 'CRITICAL').length;
-  chip.style.display = '';
-  chip.className = 'chip ' + (crit > 0 ? 'danger' : 'warn');
-  chip.textContent = String(findings.length) + (crit > 0 ? ' (' + crit + ' crit)' : '');
+// cveAdvisoryURL maps an OSV/NVD/distro-style CVE ID to a public detail
+// page. OSV returns a mix of prefixed forms — this normalises them so every
+// row in the table is clickable.
+function cveAdvisoryURL(id) {
+  if (!id) return '';
+  const s = String(id).trim();
+  // GitHub Security Advisories — link direct.
+  if (/^GHSA-[a-z0-9-]+$/i.test(s)) return 'https://github.com/advisories/' + encodeURIComponent(s);
+  // Go vulnerability DB.
+  if (/^GO-\d+-\d+$/i.test(s)) return 'https://pkg.go.dev/vuln/' + encodeURIComponent(s);
+  // Distro-prefixed CVEs: extract the canonical CVE-YYYY-NNNN tail.
+  const m = s.match(/CVE-\d{4}-\d{4,7}/i);
+  if (m) return 'https://nvd.nist.gov/vuln/detail/' + m[0].toUpperCase();
+  // RHSA / SUSE-SU advisories — vendor pages.
+  if (/^RHSA-\d{4}:\d+$/i.test(s)) return 'https://access.redhat.com/errata/' + encodeURIComponent(s);
+  if (/^SUSE-SU-\d{4}:\d+-\d+$/i.test(s)) return 'https://www.suse.com/security/cve/' + encodeURIComponent(s) + '.html';
+  if (/^ALAS-\d{4}-\d+$/i.test(s)) return 'https://alas.aws.amazon.com/' + encodeURIComponent(s) + '.html';
+  // Fallback: OSV itself always has a detail page for whatever id it emitted.
+  return 'https://osv.dev/vulnerability/' + encodeURIComponent(s);
 }
 
 function sevRank(s) {
@@ -1612,22 +1740,29 @@ function renderCVEList(findings) {
     if (r !== 0) return r;
     return (b.cvss || 0) - (a.cvss || 0);
   });
-  let html = '<div class="tbl-wrap"><table class="tbl">';
-  html += '<thead><tr><th>CVE</th><th>Severity</th><th>Package</th><th>Installed</th><th>Fixed in</th><th>Summary</th></tr></thead><tbody>';
+  // Grid-based responsive table so columns reflow on narrow screens.
+  // Uses min-content sizing so CVE/version columns don't wrap mid-token,
+  // and a flexible summary column that takes remaining space.
+  let html = '<div class="cve-grid">';
+  html += '<div class="cve-row cve-head">'
+        + '<div>CVE</div><div>Severity</div><div>Package</div>'
+        + '<div>Installed</div><div>Fixed in</div><div>Summary</div>'
+        + '</div>';
   for (const f of findings) {
-    html += '<tr data-cve-row="1" data-cve="' + escapeHTML(f.cve_id.toLowerCase()) + '" data-pkg="' + escapeHTML((f.package_id || '').toLowerCase()) + '">';
-    const link = f.cve_id.startsWith('CVE-')
-      ? '<a href="https://nvd.nist.gov/vuln/detail/' + escapeHTML(f.cve_id) + '" target="_blank" rel="noopener" class="mono">' + escapeHTML(f.cve_id) + '</a>'
-      : '<span class="mono">' + escapeHTML(f.cve_id) + '</span>';
-    html += '<td>' + link + (f.kev ? ' <span class="chip danger" title="CISA Known Exploited Vulnerability">KEV</span>' : '') + '</td>';
-    html += '<td>' + sevChip(f.severity) + (f.cvss ? ' <span class="sub mono">' + f.cvss.toFixed(1) + '</span>' : '') + '</td>';
-    html += '<td><strong>' + escapeHTML(f.package_name || f.package_id) + '</strong><div class="pkg-id">' + escapeHTML(f.package_id) + '</div></td>';
-    html += '<td class="mono sub">' + escapeHTML(f.version || '') + '</td>';
-    html += '<td class="mono sub">' + escapeHTML(f.fixed_version || '') + '</td>';
-    html += '<td class="sub" style="max-width:420px">' + escapeHTML(f.summary || '') + '</td>';
-    html += '</tr>';
+    const url = cveAdvisoryURL(f.cve_id);
+    const link = url
+      ? '<a href="' + escapeHTML(url) + '" target="_blank" rel="noopener" class="mono" style="font-size:12px">' + escapeHTML(f.cve_id) + '</a>'
+      : '<span class="mono" style="font-size:12px">' + escapeHTML(f.cve_id) + '</span>';
+    html += '<div class="cve-row" data-cve-row="1" data-cve="' + escapeHTML(f.cve_id.toLowerCase()) + '" data-pkg="' + escapeHTML((f.package_id || '').toLowerCase()) + '">';
+    html += '<div>' + link + (f.kev ? '<div style="margin-top:4px"><span class="chip danger" title="CISA Known Exploited Vulnerability">KEV</span></div>' : '') + '</div>';
+    html += '<div>' + sevChip(f.severity) + (f.cvss ? '<div class="sub mono" style="margin-top:4px">' + f.cvss.toFixed(1) + '</div>' : '') + '</div>';
+    html += '<div><strong>' + escapeHTML(f.package_name || f.package_id) + '</strong><div class="pkg-id">' + escapeHTML(f.package_id) + '</div></div>';
+    html += '<div class="mono sub">' + escapeHTML(f.version || '') + '</div>';
+    html += '<div class="mono sub">' + escapeHTML(f.fixed_version || '—') + '</div>';
+    html += '<div class="sub cve-summary">' + escapeHTML(f.summary || '') + '</div>';
+    html += '</div>';
   }
-  html += '</tbody></table></div>';
+  html += '</div>';
   wrap.innerHTML = html;
 }
 

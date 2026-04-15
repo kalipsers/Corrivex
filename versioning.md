@@ -55,6 +55,26 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.4.1 — Security moved to its own modal + linkable CVE IDs
+
+**Patch**
+
+- The Security view is no longer squeezed into the device-modal tab
+  strip. A new **Security** button in the device-modal footer opens a
+  dedicated wider modal (~1200 px, 90 vw on large screens), so the CVE
+  table can breathe — summary text isn't clipped, severity + CVSS fit
+  on one line, and the filter input lives at the top. Closes cleanly
+  with Esc or backdrop click.
+- CVE IDs are now always clickable, including the ecosystem-prefixed
+  variants you see from OSV:
+  - `CVE-YYYY-NNNN` → nvd.nist.gov
+  - `UBUNTU-CVE-*`, `DEBIAN-CVE-*`, `RHSA-*` → nvd.nist.gov (prefix stripped
+    to the canonical CVE-YYYY-NNNN)
+  - `GHSA-*` → github.com/advisories
+  - `ALAS-*`, `SUSE-SU-*` etc → respective vendor pages where known
+- The winget upgrade rows continue to show the inline `N CVEs` chip
+  (unchanged from 1.4.0).
+
 ### 1.4.0 — CVE scanning for installed software + available updates
 
 **Minor** — significant new capability with a fully migrated schema
