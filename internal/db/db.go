@@ -320,6 +320,21 @@ var migrations = []struct {
 			('cve_cache_ttl_hours',     '24'),
 			('cve_winget_cpe_map',      '')`,
 	}},
+	{12, "Vendor version cache + cascade state", []string{
+		`CREATE TABLE IF NOT EXISTS vendor_versions (
+			package_key VARCHAR(120) NOT NULL,
+			latest_version VARCHAR(120) NOT NULL,
+			channel VARCHAR(40) NULL,
+			source VARCHAR(120) NULL,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (package_key),
+			KEY idx_vv_updated (updated_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`ALTER TABLE installed_software ADD COLUMN IF NOT EXISTS cascade_state VARCHAR(20) NOT NULL DEFAULT 'unknown'`,
+		`INSERT IGNORE INTO settings (key_name, value) VALUES
+			('vendor_version_enabled', 'true'),
+			('vendor_version_interval_hours', '6')`,
+	}},
 }
 
 func (d *DB) Migrate() error {
@@ -536,6 +551,20 @@ var migrationsSQLite = []struct {
 			('cve_scan_interval_hours', '6'),
 			('cve_cache_ttl_hours',     '24'),
 			('cve_winget_cpe_map',      '')`,
+	}},
+	{12, "Vendor version cache + cascade state", []string{
+		`CREATE TABLE IF NOT EXISTS vendor_versions (
+			package_key TEXT NOT NULL PRIMARY KEY,
+			latest_version TEXT NOT NULL,
+			channel TEXT,
+			source TEXT,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_vv_updated ON vendor_versions(updated_at)`,
+		`ALTER TABLE installed_software ADD COLUMN cascade_state TEXT NOT NULL DEFAULT 'unknown'`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES
+			('vendor_version_enabled', 'true'),
+			('vendor_version_interval_hours', '6')`,
 	}},
 }
 
@@ -1825,6 +1854,52 @@ func (d *DB) GetKEVSet() (map[string]bool, error) {
 			return nil, err
 		}
 		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// -- Vendor version cache (1.6.1 cascade) ---------------------------------
+
+// VendorVersion is one row of the vendor_versions table.
+type VendorVersion struct {
+	PackageKey    string    `json:"package_key"`
+	LatestVersion string    `json:"latest_version"`
+	Channel       string    `json:"channel"`
+	Source        string    `json:"source"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// UpsertVendorVersion records a vendor-API latest-version result.
+func (d *DB) UpsertVendorVersion(key, latest, channel, source string) error {
+	q := `INSERT INTO vendor_versions (package_key, latest_version, channel, source, updated_at)
+	      VALUES (?,?,?,?,CURRENT_TIMESTAMP)
+	      ON DUPLICATE KEY UPDATE latest_version=VALUES(latest_version),
+	        channel=VALUES(channel), source=VALUES(source), updated_at=CURRENT_TIMESTAMP`
+	if d.driver == DriverSQLite {
+		q = `INSERT INTO vendor_versions (package_key, latest_version, channel, source, updated_at)
+		     VALUES (?,?,?,?,CURRENT_TIMESTAMP)
+		     ON CONFLICT(package_key) DO UPDATE SET latest_version=excluded.latest_version,
+		       channel=excluded.channel, source=excluded.source, updated_at=CURRENT_TIMESTAMP`
+	}
+	_, err := d.sql.Exec(q, key, latest, nullIfEmpty(channel), nullIfEmpty(source))
+	return err
+}
+
+// AllVendorVersions returns every row in the cache, sorted by key.
+func (d *DB) AllVendorVersions() ([]VendorVersion, error) {
+	rows, err := d.sql.Query(
+		"SELECT package_key, latest_version, COALESCE(channel,''), COALESCE(source,''), updated_at FROM vendor_versions ORDER BY package_key")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []VendorVersion
+	for rows.Next() {
+		var v VendorVersion
+		if err := rows.Scan(&v.PackageKey, &v.LatestVersion, &v.Channel, &v.Source, &v.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
 	}
 	return out, rows.Err()
 }

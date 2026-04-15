@@ -171,6 +171,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.cveSummary(w, r)
 	case method == "POST" && action == "rescan_cves":
 		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.rescanCVEs)
+	case method == "GET" && action == "vendor_versions":
+		s.vendorVersions(w, r)
 	case method == "GET" && action == "reports_summary":
 		s.reportsSummary(w, r)
 	case method == "GET" && action == "report":
@@ -1145,6 +1147,21 @@ func (s *Server) cveSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, sum)
+}
+
+// vendorVersions returns the entire vendor-API cache as JSON, for the
+// Installed software tab to show "vendor latest" chips. Cheap — the
+// table has one row per known package key.
+func (s *Server) vendorVersions(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.DB.AllVendorVersions()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if rows == nil {
+		rows = []db.VendorVersion{}
+	}
+	writeJSON(w, 200, rows)
 }
 
 // reportsSummary returns the four counters rendered on the Reports tab's

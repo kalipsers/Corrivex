@@ -55,6 +55,55 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.6.1 — Update cascade: vendor version APIs + Unmanaged state
+
+**Minor** — adds new schema (migration 12), new task types, and a new
+agent code path. No breaking protocol changes.
+
+Until 1.6.0 the only upgrade path was `winget upgrade --id X`. If
+winget didn't know the package (classic MSI installer, vendor
+installer, not in the community source), the task failed and that was
+the end. 1.6.1 layers a cascade on top of winget so the server can
+still tell the admin what version is current upstream even when
+winget can't help.
+
+- **Level 1 — winget** (unchanged). Still tried first for every
+  software-upgrade task.
+- **Level 2 — vendor JSON API.** New `internal/vendorapi` package with
+  one checker per supported vendor. Ships with JSON-only feeds (skips
+  HTML scrapers since they rot on every vendor redesign):
+  - Google Chrome — `versionhistory.googleapis.com`
+  - Mozilla Firefox / Firefox ESR — `product-details.mozilla.org`
+  - Node.js — `nodejs.org/dist/index.json`
+  - VS Code — GitHub Releases
+  - Git for Windows — GitHub Releases
+  - Notepad++ — GitHub Releases
+  Results cached in a new `vendor_versions` table (migration 12).
+  Refreshed on a 6-hour cycle (configurable via
+  `vendor_version_interval_hours` setting).
+- **Level 3 — explicit `--source winget` retry.** Only engages when
+  Level 1 failed with a "not found in any source" style error; some
+  packages register under different IDs in `msstore` vs `winget`.
+- **Level 5 — Unmanaged.** When every automatic level fails but
+  Level 2 knows the upstream version, the server marks the package
+  **Unmanaged** with `installed=X, latest_known=Y` in the UI. Admins
+  see a clear "winget can't, auto-update isn't possible, go deal with
+  it manually" signal instead of a fail-and-retry loop.
+- **Schema migration 12:**
+  - `vendor_versions` (`package_key` PK, `latest_version`, `channel`,
+    `source`, `updated_at`) — shared across the fleet, keyed on the
+    canonical vendor-product identifier.
+  - `installed_software` gains a `cascade_state` enum
+    (`winget` | `vendor_only` | `unmanaged` | `unknown`, default
+    `unknown`).
+- Dashboard **Installed software** row shows a new chip:
+  `vendor v143.0.7727` when Level 2 has a latest version and the host
+  is behind, `unmanaged` when Level 5 has tripped. Clicking either
+  chip opens a details popover with the source URL and checked-at
+  time.
+- New env var `VENDOR_VERSION_ENABLED` (default `true`) — turns the
+  Level 2 pollers off for air-gapped deployments.
+
 ### 1.6.0 — Registry software inventory + configurable skip filters
 
 **Minor** — agent now sees installers that winget doesn't. No schema

@@ -23,6 +23,7 @@ import (
 	"github.com/markov/corrivex/internal/db"
 	"github.com/markov/corrivex/internal/events"
 	"github.com/markov/corrivex/internal/hub"
+	"github.com/markov/corrivex/internal/vendorapi"
 	"github.com/markov/corrivex/internal/version"
 	"github.com/markov/corrivex/internal/web"
 )
@@ -221,6 +222,9 @@ func runServer(ctx context.Context, opts ServerOptions) {
 	scanCtx, scanCancel := context.WithCancel(ctx)
 	defer scanCancel()
 	go scanner.Run(scanCtx)
+
+	// Vendor version poller — Level 2 of the update cascade.
+	go vendorapi.NewDefault(database).Run(scanCtx)
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiSrv.Handler())

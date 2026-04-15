@@ -55,6 +55,9 @@ coverage.html
 go.work
 go.work.sum
 
+# --- Local tooling (knowledge graph cache, not a project artifact) -------
+graphify-out/
+
 # --- Misc ----------------------------------------------------------------
 node_modules/
 tmp/
