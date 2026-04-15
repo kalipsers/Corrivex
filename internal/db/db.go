@@ -1829,6 +1829,26 @@ func (d *DB) GetKEVSet() (map[string]bool, error) {
 	return out, rows.Err()
 }
 
+// AllHostnames returns every hostname in the pcs table, sorted. Used by
+// report ZIP batches that want to include a courtesy "no findings" PDF for
+// hosts that happen to have zero rows for a given report type.
+func (d *DB) AllHostnames() ([]string, error) {
+	rows, err := d.sql.Query("SELECT hostname FROM pcs ORDER BY hostname")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
 // -- Fleet-wide reports ----------------------------------------------------
 
 // AllInstalledSoftware returns the current installed-software snapshot across

@@ -1020,8 +1020,9 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
           </select>
         </label>
         <span style="flex:1"></span>
-        <a class="btn btn-sm btn-primary" id="rep-software-html" target="_blank" rel="noopener">Open HTML</a>
-        <a class="btn btn-sm btn-cta-outline" id="rep-software-pdf" target="_blank" rel="noopener">Print / PDF</a>
+        <a class="btn btn-sm btn-primary" id="rep-software-pdf" download>PDF</a>
+        <a class="btn btn-sm btn-primary" id="rep-software-pdfzip" download>ZIP (per-host PDFs)</a>
+        <a class="btn btn-sm btn-ghost" id="rep-software-html" target="_blank" rel="noopener">HTML</a>
         <a class="btn btn-sm btn-ghost" id="rep-software-csv" download>CSV</a>
         <a class="btn btn-sm btn-ghost" id="rep-software-json" download>JSON</a>
       </div>
@@ -1033,8 +1034,9 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
       </div>
       <div class="card-bd" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
         <span style="flex:1"></span>
-        <a class="btn btn-sm btn-primary" href="/api/?action=report&type=local_admins&format=html" target="_blank" rel="noopener">Open HTML</a>
-        <a class="btn btn-sm btn-cta-outline" href="/api/?action=report&type=local_admins&format=html&print=1" target="_blank" rel="noopener">Print / PDF</a>
+        <a class="btn btn-sm btn-primary" href="/api/?action=report&type=local_admins&format=pdf" download>PDF</a>
+        <a class="btn btn-sm btn-primary" href="/api/?action=report&type=local_admins&format=pdfzip" download>ZIP (per-host PDFs)</a>
+        <a class="btn btn-sm btn-ghost" href="/api/?action=report&type=local_admins&format=html" target="_blank" rel="noopener">HTML</a>
         <a class="btn btn-sm btn-ghost" href="/api/?action=report&type=local_admins&format=csv" download>CSV</a>
         <a class="btn btn-sm btn-ghost" href="/api/?action=report&type=local_admins&format=json" download>JSON</a>
       </div>
@@ -1051,8 +1053,9 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
           </select>
         </label>
         <span style="flex:1"></span>
-        <a class="btn btn-sm btn-primary" id="rep-cve-html" target="_blank" rel="noopener">Open HTML</a>
-        <a class="btn btn-sm btn-cta-outline" id="rep-cve-pdf" target="_blank" rel="noopener">Print / PDF</a>
+        <a class="btn btn-sm btn-primary" id="rep-cve-pdf" download>PDF</a>
+        <a class="btn btn-sm btn-primary" id="rep-cve-pdfzip" download>ZIP (per-host PDFs)</a>
+        <a class="btn btn-sm btn-ghost" id="rep-cve-html" target="_blank" rel="noopener">HTML</a>
         <a class="btn btn-sm btn-ghost" id="rep-cve-csv" download>CSV</a>
         <a class="btn btn-sm btn-ghost" id="rep-cve-json" download>JSON</a>
       </div>
@@ -2187,23 +2190,40 @@ function populateReportsHostSelectors() {
 }
 
 function updateReportLinks() {
-  const build = (type, fmt, scope, extra) => {
+  const build = (type, fmt, scope) => {
     let u = '/api/?action=report&type=' + encodeURIComponent(type) + '&format=' + fmt;
     if (scope && scope !== 'all') u += '&host=' + encodeURIComponent(scope);
-    if (extra) u += '&' + extra;
     return u;
   };
   const swScope = document.getElementById('rep-software-scope')?.value || 'all';
   const cveScope = document.getElementById('rep-cve-scope')?.value || 'all';
-  const set = (id, href) => { const el = document.getElementById(id); if (el) el.href = href; };
-  set('rep-software-csv',  build('installed_software', 'csv',  swScope));
-  set('rep-software-json', build('installed_software', 'json', swScope));
-  set('rep-software-html', build('installed_software', 'html', swScope));
-  set('rep-software-pdf',  build('installed_software', 'html', swScope, 'print=1'));
-  set('rep-cve-csv',       build('cve_findings',       'csv',  cveScope));
-  set('rep-cve-json',      build('cve_findings',       'json', cveScope));
-  set('rep-cve-html',      build('cve_findings',       'html', cveScope));
-  set('rep-cve-pdf',       build('cve_findings',       'html', cveScope, 'print=1'));
+  const set = (id, href, disabled) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.href = href;
+    // Disable per-host ZIP when the scope is a single host — that's a single
+    // PDF, not a zip.
+    if (disabled) {
+      el.classList.add('is-disabled');
+      el.style.opacity = '0.45';
+      el.style.pointerEvents = 'none';
+    } else {
+      el.classList.remove('is-disabled');
+      el.style.opacity = '';
+      el.style.pointerEvents = '';
+    }
+  };
+  set('rep-software-csv',    build('installed_software', 'csv',    swScope));
+  set('rep-software-json',   build('installed_software', 'json',   swScope));
+  set('rep-software-html',   build('installed_software', 'html',   swScope));
+  set('rep-software-pdf',    build('installed_software', 'pdf',    swScope));
+  set('rep-software-pdfzip', build('installed_software', 'pdfzip', 'all'), swScope !== 'all');
+
+  set('rep-cve-csv',    build('cve_findings', 'csv',    cveScope));
+  set('rep-cve-json',   build('cve_findings', 'json',   cveScope));
+  set('rep-cve-html',   build('cve_findings', 'html',   cveScope));
+  set('rep-cve-pdf',    build('cve_findings', 'pdf',    cveScope));
+  set('rep-cve-pdfzip', build('cve_findings', 'pdfzip', 'all'), cveScope !== 'all');
 }
 
 async function loadReportsSummary() {

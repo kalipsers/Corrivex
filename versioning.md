@@ -55,6 +55,35 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.5.2 — Pure-Go PDF export + per-host ZIP batch (Reports slice 3)
+
+**Patch** — adds real server-generated PDFs without a headless browser
+or extra container. New dependency: `github.com/johnfercher/maroto/v2`
+(pure Go, no CGo).
+
+- Two new `format` values on `GET /api/?action=report`:
+  - `format=pdf` — one PDF for the selected scope (fleet or
+    `host=HOST`).
+  - `format=pdfzip` — only meaningful for `scope=all`: server
+    partitions the rows by host, renders one PDF per host, and streams
+    the bundle as a zip with a `README.txt` cover and a
+    `manifest.json` (host → filename → row count). Hosts with no rows
+    are still included with a one-line "no findings" PDF so the fleet
+    report is complete.
+- New `internal/report/pdf.go` reproduces the Swiss-modernist HTML
+  layout in Maroto primitives: brand strip, title, meta column,
+  summary KV band, data table with alternating-row background and
+  soft grey rules. Helvetica-family (built-in PDF fonts, no font
+  embedding) keeps the file small — typical installed-software PDF
+  for one host fits in 10–30 kB.
+- Reports tab: **PDF** button replaces "Print / PDF" (browser-print
+  variant kept as `Open HTML` → user can still Ctrl-P if they prefer
+  the web stylesheet). A fourth button, **ZIP (per-host PDFs)**,
+  appears only when scope = Entire fleet.
+- Page layout: A4, 18 mm top/bottom + 14 mm side margins, page number
+  "Corrivex · page n / N" in the bottom-right footer, report title in
+  the bottom-left.
+
 ### 1.5.1 — Printable HTML reports + PDF via browser (Reports slice 2)
 
 **Patch** — adds a third output format to the report endpoints. No new

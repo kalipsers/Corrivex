@@ -1211,6 +1211,15 @@ func (s *Server) downloadReport(w http.ResponseWriter, r *http.Request) {
 		switch format {
 		case report.FormatHTML:
 			out, err = report.HTML(typ, softwareRows, scope, generatedBy)
+		case report.FormatPDF:
+			out, err = report.PDF(typ, softwareRows, scope, generatedBy)
+		case report.FormatPDFZip:
+			hosts, herr := s.DB.AllHostnames()
+			if herr != nil {
+				err = herr
+				break
+			}
+			out, err = report.PDFZip(typ, softwareRows, hosts, scope, generatedBy)
 		default:
 			out, err = report.InstalledSoftware(softwareRows, format, scope)
 		}
@@ -1222,6 +1231,15 @@ func (s *Server) downloadReport(w http.ResponseWriter, r *http.Request) {
 		switch format {
 		case report.FormatHTML:
 			out, err = report.HTML(typ, adminsRows, "fleet", generatedBy)
+		case report.FormatPDF:
+			out, err = report.PDF(typ, adminsRows, "fleet", generatedBy)
+		case report.FormatPDFZip:
+			hosts, herr := s.DB.AllHostnames()
+			if herr != nil {
+				err = herr
+				break
+			}
+			out, err = report.PDFZip(typ, adminsRows, hosts, "fleet", generatedBy)
 		default:
 			out, err = report.LocalAdmins(adminsRows, format, "fleet")
 		}
@@ -1237,6 +1255,15 @@ func (s *Server) downloadReport(w http.ResponseWriter, r *http.Request) {
 		switch format {
 		case report.FormatHTML:
 			out, err = report.HTML(typ, cveRows, scope, generatedBy)
+		case report.FormatPDF:
+			out, err = report.PDF(typ, cveRows, scope, generatedBy)
+		case report.FormatPDFZip:
+			hosts, herr := s.DB.AllHostnames()
+			if herr != nil {
+				err = herr
+				break
+			}
+			out, err = report.PDFZip(typ, cveRows, hosts, scope, generatedBy)
 		default:
 			out, err = report.CVEFindings(cveRows, format, scope)
 		}
