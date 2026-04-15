@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/markov/corrivex/internal/api"
+	"github.com/markov/corrivex/internal/cve"
 	"github.com/markov/corrivex/internal/db"
 	"github.com/markov/corrivex/internal/events"
 	"github.com/markov/corrivex/internal/hub"
@@ -42,6 +43,10 @@ type ServerOptions struct {
 	// MariaDB
 	DBHost, DBName, DBUser, DBPass string
 	DBPort                         int
+
+	// CVE scanner
+	CVEScanEnabled bool
+	NVDAPIKey      string
 }
 
 func main() {
@@ -137,6 +142,8 @@ func parseOptions() ServerOptions {
 	agentPath := flag.String("agent-bin", envOr("AGENT_BIN", defaultAgentBinPath()), "path to corrivex-agent.exe to serve")
 	tlsCert := flag.String("tls-cert", envOr("TLS_CERT", ""), "TLS certificate file (PEM); empty = HTTP only")
 	tlsKey := flag.String("tls-key", envOr("TLS_KEY", ""), "TLS private key file (PEM); empty = HTTP only")
+	cveEnabled := flag.Bool("cve-scan-enabled", envOrBool("CVE_SCAN_ENABLED", true), "enable background CVE scanning against OSV + NVD + CISA KEV")
+	nvdAPIKey := flag.String("nvd-api-key", envOr("NVD_API_KEY", ""), "NVD API key (optional; raises rate limit 5→50 per 30s)")
 	flag.Parse()
 	return ServerOptions{
 		Addr: *addr, TLSCert: *tlsCert, TLSKey: *tlsKey,
@@ -145,6 +152,8 @@ func parseOptions() ServerOptions {
 		DBDriver: *dbDriver, DBPath: *dbPath,
 		DBHost: *dbHost, DBPort: *dbPort, DBName: *dbName,
 		DBUser: *dbUser, DBPass: *dbPass,
+		CVEScanEnabled: *cveEnabled,
+		NVDAPIKey:      *nvdAPIKey,
 	}
 }
 
@@ -206,6 +215,12 @@ func runServer(ctx context.Context, opts ServerOptions) {
 		log.Fatalf("dashboard: %v", err)
 	}
 	apiSrv := api.New(database, agentBin, opts.APISecret, broker, connHub)
+
+	scanner := cve.New(database, opts.NVDAPIKey, broker, opts.CVEScanEnabled)
+	apiSrv.CVE = scanner
+	scanCtx, scanCancel := context.WithCancel(ctx)
+	defer scanCancel()
+	go scanner.Run(scanCtx)
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiSrv.Handler())

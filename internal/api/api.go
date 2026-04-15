@@ -28,6 +28,13 @@ import (
 	"github.com/markov/corrivex/internal/version"
 )
 
+// CVEKicker is the subset of the CVE scanner the API cares about. Decoupled
+// as an interface so internal/cve can import db + events without api
+// importing cve (avoids a cycle through wiring in cmd/server/main.go).
+type CVEKicker interface {
+	Kick()
+}
+
 type Server struct {
 	DB           *db.DB
 	AgentBinary  []byte // embedded corrivex-agent.exe
@@ -35,6 +42,7 @@ type Server struct {
 	APISecret    string // empty disables auth
 	Broker       *events.Broker
 	Hub          *hub.Hub
+	CVE          CVEKicker // nil when scanning is disabled
 	mux          *http.ServeMux
 	hostRe       *regexp.Regexp
 }
@@ -156,6 +164,12 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.installedSoftware(w, r)
 	case method == "GET" && action == "software_history":
 		s.softwareHistory(w, r)
+	case method == "GET" && action == "cve_findings":
+		s.cveFindings(w, r)
+	case method == "GET" && action == "cve_summary":
+		s.cveSummary(w, r)
+	case method == "POST" && action == "rescan_cves":
+		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.rescanCVEs)
 	case method == "GET" && r.URL.Query().Get("host") != "":
 		s.singlePC(w, r)
 	case method == "GET":
@@ -1096,6 +1110,48 @@ func (s *Server) softwareHistory(w http.ResponseWriter, r *http.Request) {
 		rows = []db.SoftwareHistory{}
 	}
 	writeJSON(w, 200, rows)
+}
+
+// cveFindings returns every CVE affecting the host's installed software,
+// joined against the CVE cache and enriched with the KEV flag. Empty
+// response when the scanner hasn't run yet or no findings exist.
+func (s *Server) cveFindings(w http.ResponseWriter, r *http.Request) {
+	host := s.normalizeHost(r.URL.Query().Get("host"))
+	if host == "" {
+		writeJSON(w, 400, map[string]string{"error": "missing host"})
+		return
+	}
+	rows, err := s.DB.CVEFindingsForHost(host)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if rows == nil {
+		rows = []db.CVEHostFinding{}
+	}
+	writeJSON(w, 200, rows)
+}
+
+// cveSummary returns dashboard-top-bar counters.
+func (s *Server) cveSummary(w http.ResponseWriter, r *http.Request) {
+	sum, err := s.DB.CVESummary()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, sum)
+}
+
+// rescanCVEs wakes the scanner. Admin-only. Returns immediately — the
+// actual scan runs asynchronously and publishes a "cve_scan_done" event
+// over the WS when finished.
+func (s *Server) rescanCVEs(w http.ResponseWriter, r *http.Request) {
+	if s.CVE == nil {
+		writeJSON(w, 503, map[string]string{"error": "cve scanner disabled"})
+		return
+	}
+	s.CVE.Kick()
+	writeJSON(w, 200, map[string]string{"status": "triggered"})
 }
 
 func (s *Server) hostTasks(w http.ResponseWriter, r *http.Request) {

@@ -219,6 +219,8 @@ DB-side delete for offline hosts).
 | `--agent-bin` | `AGENT_BIN` | *(see below)* | Path to `corrivex-agent.exe` to serve at `/api/?action=agent.exe` |
 | `--tls-cert` | `TLS_CERT` | *(empty)* | Enable HTTPS |
 | `--tls-key` | `TLS_KEY` | *(empty)* | |
+| `--cve-scan-enabled` | `CVE_SCAN_ENABLED` | `true` | Background CVE scanning against OSV + NVD + CISA KEV |
+| `--nvd-api-key` | `NVD_API_KEY` | *(empty)* | Optional NVD API key — lifts rate limit from 5 to 50 requests per 30 s |
 
 `--agent-bin` defaults to `./corrivex-agent.exe` next to the server binary on
 Windows; on Linux the Dockerfile sets `AGENT_BIN=/app/corrivex-agent.exe`.
@@ -258,6 +260,63 @@ corrivex-agent.exe run             (foreground)
 - **Transport** — HTTP by default; HTTPS by passing a cert + key (any standard
   PEM, e.g. ACME, internal CA). Reverse-proxy works equally well.
 - **No emojis as icons**; SVGs only. Cookie respects `prefers-reduced-motion`.
+
+## CVE scanning
+
+On a 6-hour cycle (configurable via the `cve_scan_interval_hours` setting),
+the server walks every unique `(package_id, version)` pair in the per-host
+`installed_software` inventory and queries public CVE feeds:
+
+1. **[OSV.dev](https://osv.dev)** first — free, no key, no rate limit in
+   practice. Good coverage of OSS packages reachable via winget.
+2. **[NVD 2.0](https://nvd.nist.gov/developers/vulnerabilities)** on OSV
+   miss — the authoritative source for Windows desktop apps. Queried by
+   CPE (`vendor:product`). Rate-limited to 5 req / 30 s without a key; set
+   `NVD_API_KEY` to raise it to 50 / 30 s.
+3. **[CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)**
+   refreshed daily. Any matching CVE gets a red **KEV** chip in the UI.
+
+Results are cached per `(package_id, version)` — not per host — so a fleet
+of 100 hosts all running the same Firefox build costs exactly one API
+query per scan cycle. TTL defaults to 24 h (`cve_cache_ttl_hours` setting).
+
+### Winget-ID → CPE mapping
+
+NVD CPE names are notoriously inconsistent (`Notepad++.Notepad++` →
+`notepad++:notepad++`, but `Mozilla.Firefox` → `mozilla:firefox`). The
+scanner ships a hand-curated Go map (`internal/cve/mapper.go`) covering the
+~80 most common winget IDs. Unmapped IDs are skipped for NVD (to avoid
+false positives from fuzzy guesses) but still queried against OSV.
+
+To extend the mapping without rebuilding, paste into **Settings → CVE
+mappings** — one entry per line:
+
+```
+OBSProject.OBSStudio  obsproject:obs_studio
+MyVendor.MyApp        my-vendor:my_app
+```
+
+Lines starting with `#` are ignored.
+
+### Where CVEs surface in the UI
+
+- **Dashboard top bar** — red `CVEs: N · K KEV` chip when findings exist.
+- **Device modal → Security tab** — every CVE affecting the host's
+  installed software, sorted KEV-first then by severity. Each CVE links
+  to its NVD page. Admins see a **Rescan** button that bypasses the 24 h
+  cache and forces a full re-query.
+- **Device modal → Winget tab** — each available-upgrade row shows a red
+  chip `N CVEs · K crit · KEV` when the installed version has findings.
+- **API** — `GET /api/?action=cve_findings&host=HOST`,
+  `GET /api/?action=cve_summary`, `POST /api/?action=rescan_cves` (admin).
+
+### Air-gapped deployments
+
+Set `CVE_SCAN_ENABLED=false` to disable all outbound traffic to OSV / NVD /
+CISA. The UI degrades gracefully — the top-bar badge stays hidden, the
+Security tab shows a "No known CVEs" empty state, and no chips render on
+the winget rows. Flipping the flag back on picks up on the next scanner
+cycle.
 
 ## Build from source
 

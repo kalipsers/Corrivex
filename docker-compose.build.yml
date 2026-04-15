@@ -56,6 +56,8 @@ services:
       HISTORY_KEEP: "50"
       API_SECRET: ${API_SECRET:-}
       TZ: ${TZ:-UTC}
+      CVE_SCAN_ENABLED: ${CVE_SCAN_ENABLED:-true}
+      NVD_API_KEY: ${NVD_API_KEY:-}
     ports:
       - "8484:8484"
 

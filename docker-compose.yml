@@ -54,6 +54,9 @@ services:
       # Sets the Go process's local timezone — time.Now() and the formatted
       # timestamps in reports + logs line up with the DB.
       TZ: ${TZ:-UTC}
+      # CVE scanner — set CVE_SCAN_ENABLED=false for air-gapped deployments.
+      CVE_SCAN_ENABLED: ${CVE_SCAN_ENABLED:-true}
+      NVD_API_KEY: ${NVD_API_KEY:-}
     ports:
       - "8484:8484"
 

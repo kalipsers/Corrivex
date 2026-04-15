@@ -744,6 +744,9 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
       </div>
       <span class="mono" style="font-size:12px;color:var(--c-muted)" title="Corrivex application version">v{{.AppVersion}}</span>
       <span class="mono" style="font-size:11px;color:var(--c-muted);opacity:.7" title="Database schema migration version">schema v{{.SchemaVersion}}</span>
+      <a id="cveBadge" href="#" class="mono" style="display:none;font-size:11px;padding:3px 8px;border-radius:999px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;text-decoration:none" title="Open CVEs across the fleet — click for details">
+        CVEs: <strong id="cveBadgeCount">0</strong><span id="cveBadgeKev" style="margin-left:6px;display:none"> · <strong id="cveBadgeKevCount">0</strong> KEV</span>
+      </a>
     </div>
   </div>
 </header>
@@ -1117,6 +1120,7 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
 const API = "{{.APIUrl}}";
 const CURRENT_USER = { username: "{{.CurrentUser.username}}", role: "{{.CurrentUser.role}}", totp_enabled: {{if .CurrentUser.totp_enabled}}true{{else}}false{{end}} };
 if (CURRENT_USER.role === 'admin') document.body.classList.add('is-admin');
+window.IS_ADMIN = CURRENT_USER.role === 'admin';
 
 // ---- Tabs -----------------------------------------------------------------
 document.querySelectorAll('.tab').forEach(t => {
@@ -1272,6 +1276,7 @@ function renderDeviceModal(pc) {
   html += '<button class="modal-tab' + (prevTab==='winget'?' is-active':'') + '" data-modal-tab="winget">Winget <span class="chip muted">' + pkgs.length + '</span></button>';
   html += '<button class="modal-tab' + (prevTab==='wu'?' is-active':'') + '" data-modal-tab="wu">Windows update <span class="chip muted">' + wu.length + '</span></button>';
   html += '<button class="modal-tab' + (prevTab==='installed'?' is-active':'') + '" data-modal-tab="installed">Installed software</button>';
+  html += '<button class="modal-tab' + (prevTab==='cve'?' is-active':'') + '" data-modal-tab="cve">Security <span class="chip" id="cve-tab-count" style="display:none"></span></button>';
   html += '</nav>';
 
   html += '<div class="modal-panel' + (prevTab==='overview'?' is-active':'') + '" data-modal-panel="overview">';
@@ -1346,6 +1351,7 @@ function renderDeviceModal(pc) {
       html += '<span class="pkg-arrow">→</span>';
       html += '<span class="pkg-v"><strong>' + escapeHTML(p.available || '?') + '</strong></span>';
       html += '<span class="pkg-status" data-pkg-status="' + escapeHTML(pid) + '">' + pkgStatusChip(effectiveStatus) + '</span>';
+      html += '<span class="pkg-cve" data-pkg-cve="' + escapeHTML(pid) + '"></span>';
       html += '<button class="btn btn-sm btn-cta-outline" data-action="upgrade-one" data-host="' + escapeHTML(pc.hostname) + '" data-id="' + escapeHTML(pid) + '" data-name="' + escapeHTML(pname) + '"' + (disabled ? ' disabled' : '') + '>' + (disabled ? '…' : 'Upgrade') + '</button>';
       html += '</label>';
     }
@@ -1419,6 +1425,21 @@ function renderDeviceModal(pc) {
   html += '</section>';
   html += '</div>'; // /installed
 
+  // ---- Security (CVE) panel (lazy-loaded) ------------------------------
+  html += '<div class="modal-panel' + (prevTab==='cve'?' is-active':'') + '" data-modal-panel="cve">';
+  html += '<section class="section">';
+  html += '<div class="section-hd"><div class="section-title">Known CVEs for installed software</div>';
+  if (window.IS_ADMIN) {
+    html += '<button class="btn btn-sm btn-ghost" id="rescan-cves-btn" title="Force the server to re-query OSV and NVD for every installed (package, version) pair now">Rescan</button>';
+  }
+  html += '<input type="search" class="input" id="cve-filter" placeholder="filter by CVE id or package" style="min-width:220px;font-size:12px;padding:6px 10px">';
+  html += '</div>';
+  html += '<div id="cve-list" data-host="' + escapeHTML(pc.hostname) + '" data-loaded="0">';
+  html += '<div class="card-empty">Click the tab to load…</div>';
+  html += '</div>';
+  html += '</section>';
+  html += '</div>'; // /cve
+
   // Recent tasks / users / admins — belong with Overview. Re-open the panel
   // (hidden unless Overview is selected) and drop them in.
   html += '<div class="modal-panel' + (prevTab==="overview"?' is-active':'') + '" data-modal-panel="overview">';
@@ -1476,6 +1497,7 @@ function bindModalTabs() {
       document.querySelectorAll('[data-modal-panel]').forEach(p => p.classList.toggle('is-active', p.dataset.modalPanel === key));
       // Lazy-load installed software list the first time the tab opens.
       if (key === 'installed') loadInstalledSoftware();
+      if (key === 'cve') loadCVEFindings();
     });
   });
   // Also auto-load if the tab was already active when modal opened
@@ -1483,9 +1505,174 @@ function bindModalTabs() {
   if (document.querySelector('[data-modal-tab="installed"]')?.classList.contains('is-active')) {
     loadInstalledSoftware();
   }
-  // Filter input
+  if (document.querySelector('[data-modal-tab="cve"]')?.classList.contains('is-active')) {
+    loadCVEFindings();
+  }
+  // Filter inputs
   const f = document.getElementById('installed-filter');
   if (f) f.addEventListener('input', applyInstalledFilter);
+  const cf = document.getElementById('cve-filter');
+  if (cf) cf.addEventListener('input', applyCVEFilter);
+  const rb = document.getElementById('rescan-cves-btn');
+  if (rb) rb.addEventListener('click', triggerCVERescan);
+
+  // Always prefetch CVE findings on modal open — it's one API call and it
+  // drives both the Security-tab content and the per-row chips in the
+  // Winget tab. Also reset the cache so a newly-opened host doesn't see
+  // stale chips from the previously-open host.
+  window.__cveByPkg = {};
+  populateWingetCVEChips();
+  loadCVEFindings();
+}
+
+// Cache of CVE findings for the currently-open device modal. Keyed by
+// package_id → array of {cve_id, severity, kev, fixed_version}. Reset every
+// time a new modal opens.
+window.__cveByPkg = {};
+
+async function loadCVEFindings() {
+  const wrap = document.getElementById('cve-list');
+  if (!wrap) return;
+  if (wrap.dataset.loaded === '1') return;
+  wrap.dataset.loaded = '1';
+  const host = wrap.dataset.host;
+  wrap.innerHTML = '<div class="card-empty">Loading…</div>';
+  try {
+    const res = await fetch(API + '?action=cve_findings&host=' + encodeURIComponent(host), { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const findings = await res.json();
+    window.__cveFindings = findings || [];
+    indexCVEFindingsByPkg(findings || []);
+    renderCVEList(findings || []);
+    populateWingetCVEChips();
+    updateCVETabCount(findings || []);
+  } catch (e) {
+    wrap.innerHTML = '<div class="card-empty">Failed to load: ' + escapeHTML(String(e)) + '</div>';
+  }
+}
+
+function indexCVEFindingsByPkg(findings) {
+  const by = {};
+  for (const f of findings) {
+    if (!by[f.package_id]) by[f.package_id] = [];
+    by[f.package_id].push(f);
+  }
+  window.__cveByPkg = by;
+}
+
+function populateWingetCVEChips() {
+  const nodes = document.querySelectorAll('[data-pkg-cve]');
+  if (!nodes.length) return;
+  const by = window.__cveByPkg || {};
+  nodes.forEach(node => {
+    const pid = node.dataset.pkgCve;
+    const list = by[pid] || [];
+    if (!list.length) { node.innerHTML = ''; return; }
+    const crit = list.filter(c => (c.severity || '').toUpperCase() === 'CRITICAL').length;
+    const kev = list.filter(c => c.kev).length;
+    let label = list.length + ' CVE' + (list.length === 1 ? '' : 's');
+    if (crit > 0) label += ' · ' + crit + ' crit';
+    if (kev > 0) label += ' · KEV';
+    node.innerHTML = '<span class="chip danger" title="Upgrade will resolve the CVEs affecting the installed version">' + escapeHTML(label) + '</span>';
+  });
+}
+
+function updateCVETabCount(findings) {
+  const chip = document.getElementById('cve-tab-count');
+  if (!chip) return;
+  if (!findings.length) { chip.style.display = 'none'; chip.textContent = ''; return; }
+  const crit = findings.filter(f => (f.severity || '').toUpperCase() === 'CRITICAL').length;
+  chip.style.display = '';
+  chip.className = 'chip ' + (crit > 0 ? 'danger' : 'warn');
+  chip.textContent = String(findings.length) + (crit > 0 ? ' (' + crit + ' crit)' : '');
+}
+
+function sevRank(s) {
+  const order = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1, UNKNOWN: 0 };
+  return order[(s || '').toUpperCase()] ?? 0;
+}
+
+function sevChip(s) {
+  const u = (s || 'UNKNOWN').toUpperCase();
+  const cls = u === 'CRITICAL' ? 'danger' : u === 'HIGH' ? 'danger' : u === 'MEDIUM' ? 'warn' : u === 'LOW' ? 'info' : 'muted';
+  return '<span class="chip ' + cls + '">' + escapeHTML(u) + '</span>';
+}
+
+function renderCVEList(findings) {
+  const wrap = document.getElementById('cve-list');
+  if (!wrap) return;
+  if (!findings.length) {
+    wrap.innerHTML = '<div class="card-empty">No known CVEs for this host. Either the scanner has not run yet, or all installed packages are clean.</div>';
+    return;
+  }
+  // Sort: KEV first, then CRITICAL → HIGH → MEDIUM → LOW → UNKNOWN, then CVSS desc.
+  findings.sort((a, b) => {
+    if (a.kev !== b.kev) return a.kev ? -1 : 1;
+    const r = sevRank(b.severity) - sevRank(a.severity);
+    if (r !== 0) return r;
+    return (b.cvss || 0) - (a.cvss || 0);
+  });
+  let html = '<div class="tbl-wrap"><table class="tbl">';
+  html += '<thead><tr><th>CVE</th><th>Severity</th><th>Package</th><th>Installed</th><th>Fixed in</th><th>Summary</th></tr></thead><tbody>';
+  for (const f of findings) {
+    html += '<tr data-cve-row="1" data-cve="' + escapeHTML(f.cve_id.toLowerCase()) + '" data-pkg="' + escapeHTML((f.package_id || '').toLowerCase()) + '">';
+    const link = f.cve_id.startsWith('CVE-')
+      ? '<a href="https://nvd.nist.gov/vuln/detail/' + escapeHTML(f.cve_id) + '" target="_blank" rel="noopener" class="mono">' + escapeHTML(f.cve_id) + '</a>'
+      : '<span class="mono">' + escapeHTML(f.cve_id) + '</span>';
+    html += '<td>' + link + (f.kev ? ' <span class="chip danger" title="CISA Known Exploited Vulnerability">KEV</span>' : '') + '</td>';
+    html += '<td>' + sevChip(f.severity) + (f.cvss ? ' <span class="sub mono">' + f.cvss.toFixed(1) + '</span>' : '') + '</td>';
+    html += '<td><strong>' + escapeHTML(f.package_name || f.package_id) + '</strong><div class="pkg-id">' + escapeHTML(f.package_id) + '</div></td>';
+    html += '<td class="mono sub">' + escapeHTML(f.version || '') + '</td>';
+    html += '<td class="mono sub">' + escapeHTML(f.fixed_version || '') + '</td>';
+    html += '<td class="sub" style="max-width:420px">' + escapeHTML(f.summary || '') + '</td>';
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+  wrap.innerHTML = html;
+}
+
+function applyCVEFilter(e) {
+  const q = (e.target.value || '').toLowerCase().trim();
+  document.querySelectorAll('[data-cve-row]').forEach(tr => {
+    const hit = !q || tr.dataset.cve.includes(q) || tr.dataset.pkg.includes(q);
+    tr.style.display = hit ? '' : 'none';
+  });
+}
+
+async function triggerCVERescan() {
+  const btn = document.getElementById('rescan-cves-btn');
+  if (!btn) return;
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = 'Rescan queued…';
+  try {
+    await fetch(API + '?action=rescan_cves', { method: 'POST', credentials: 'same-origin' });
+  } catch (_) { /* ignore — UI already gave feedback */ }
+  setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 4000);
+}
+
+async function loadCVEBadge() {
+  try {
+    const res = await fetch(API + '?action=cve_summary', { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const s = await res.json();
+    const badge = document.getElementById('cveBadge');
+    const count = document.getElementById('cveBadgeCount');
+    const kevWrap = document.getElementById('cveBadgeKev');
+    const kevCount = document.getElementById('cveBadgeKevCount');
+    if (!badge || !count) return;
+    const open = s.open_cves || 0;
+    if (open <= 0) { badge.style.display = 'none'; return; }
+    badge.style.display = '';
+    count.textContent = String(open);
+    const kev = s.kev_count || 0;
+    if (kev > 0 && kevWrap && kevCount) {
+      kevWrap.style.display = '';
+      kevCount.textContent = String(kev);
+    } else if (kevWrap) {
+      kevWrap.style.display = 'none';
+    }
+  } catch (_) { /* silent — best effort */ }
 }
 
 async function loadInstalledSoftware() {
@@ -1740,9 +1927,22 @@ function handleWsEvent(ev) {
     // visual hint only; full reload keeps table simple and consistent.
     toast('Domain list changed — refreshing', 'ok');
     setTimeout(() => location.reload(), 600);
+  } else if (ev.type === 'cve_scan_done') {
+    // Server finished a CVE scan pass. Refresh the top-bar badge and, if
+    // the device modal is open with the Security tab loaded, reload it.
+    loadCVEBadge();
+    const cveWrap = document.getElementById('cve-list');
+    if (cveWrap && cveWrap.dataset.loaded === '1') {
+      cveWrap.dataset.loaded = '0';
+      loadCVEFindings();
+    }
+    toast('CVE scan refreshed', 'ok');
   }
 }
 connectWS();
+// Populate the fleet-wide CVE badge once at page load; further updates
+// arrive via the 'cve_scan_done' WS event above.
+loadCVEBadge();
 
 // ---- Live row update ------------------------------------------------------
 function renderOrUpdateRow(pc) {

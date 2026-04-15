@@ -55,6 +55,51 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.4.0 — CVE scanning for installed software + available updates
+
+**Minor** — significant new capability with a fully migrated schema
+(automatic — no manual steps). Adds an outbound dependency on public CVE
+feeds (OSV, NVD, CISA KEV); see `CVE_SCAN_ENABLED` if you need to disable
+it on air-gapped deployments.
+
+- Server now runs a background CVE scanner that, for every unique
+  `(package_id, version)` pair across all hosts' `installed_software`
+  snapshots, queries OSV first and falls back to NVD (by CPE) on miss.
+  Results are cached per `(pkg_id, version)` — 100 hosts running the
+  same Firefox build = one API query. Cache TTL is 24 h; the scanner
+  wakes on startup + every 6 h + on-demand.
+- CISA KEV (Known Exploited Vulnerabilities) catalog is synced daily.
+  Any CVE in that list gets a **KEV** chip in the UI, flagging that it's
+  being actively exploited in the wild.
+- New **Security** sub-tab in the device modal — lists every CVE
+  affecting the host's installed software, grouped by package, with
+  severity + CVSS + KEV chip + "fixed in" version. Empty state is a
+  friendly "No known CVEs" instead of a blank table.
+- **Winget upgrade tab** — each available-upgrade row now shows a red
+  chip `fixes N CVEs (K critical)` when the current installed version
+  has findings that the target version resolves. Diff is computed
+  server-side from the cache, so the chip renders instantly without
+  per-row API calls.
+- **Dashboard top bar** — new CVE counter next to the schema version:
+  `CVEs: N open / K KEV`. Links to a new all-hosts roll-up view
+  (filterable by severity / KEV / host).
+- New API endpoints (admin/operator session required):
+  - `GET /api/?action=cve_findings&host=HOST` — per-host CVE list
+  - `GET /api/?action=cve_summary` — dashboard counters
+  - `POST /api/?action=rescan_cves` — admin-only, forces a full
+    rescan ignoring the 24 h cache
+- Schema migration **11** — `cve_cache` (keyed on `pkg_id+version`),
+  `cve_kev` (catalog snapshot). Idempotent, runs on startup.
+- Winget-ID → CPE mapping lives in `internal/cve/mapper.go` as a
+  hand-curated Go map covering the ~80 most common winget IDs. Unmapped
+  packages fall back to a fuzzy `vendor:product` guess parsed from the
+  winget ID. Admins can extend the map without a rebuild via the new
+  **Settings → CVE mappings** textarea (stored in the `settings` table).
+- Two new env vars:
+  - `CVE_SCAN_ENABLED` (default `true`) — master switch.
+  - `NVD_API_KEY` (optional) — raises the NVD rate limit from 5→50
+    requests per 30 s. Sign up free at nvd.nist.gov/developers.
+
 ### 1.3.2 — Auto-mitigate package_agreements_not_accepted
 
 **Patch**

@@ -295,6 +295,31 @@ var migrations = []struct {
 			KEY idx_hist_host_time (hostname, detected_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}},
+	{11, "CVE scan cache + CISA KEV catalog", []string{
+		`CREATE TABLE IF NOT EXISTS cve_cache (
+			package_id VARCHAR(255) NOT NULL,
+			version VARCHAR(200) NOT NULL,
+			source VARCHAR(20) NOT NULL DEFAULT 'none',
+			cves_json LONGTEXT NULL,
+			scanned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (package_id, version),
+			KEY idx_cve_scanned (scanned_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS cve_kev (
+			cve_id VARCHAR(30) NOT NULL,
+			vendor VARCHAR(255) NULL,
+			product VARCHAR(255) NULL,
+			vulnerability_name VARCHAR(500) NULL,
+			date_added DATE NULL,
+			short_description TEXT NULL,
+			synced_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (cve_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`INSERT IGNORE INTO settings (key_name, value) VALUES
+			('cve_scan_interval_hours', '6'),
+			('cve_cache_ttl_hours',     '24'),
+			('cve_winget_cpe_map',      '')`,
+	}},
 }
 
 func (d *DB) Migrate() error {
@@ -487,6 +512,30 @@ var migrationsSQLite = []struct {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_hist_host_pkg ON installed_software_history(hostname, package_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_hist_host_time ON installed_software_history(hostname, detected_at)`,
+	}},
+	{11, "CVE scan cache + CISA KEV catalog", []string{
+		`CREATE TABLE IF NOT EXISTS cve_cache (
+			package_id TEXT NOT NULL,
+			version TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT 'none',
+			cves_json TEXT,
+			scanned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (package_id, version)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_cve_scanned ON cve_cache(scanned_at)`,
+		`CREATE TABLE IF NOT EXISTS cve_kev (
+			cve_id TEXT NOT NULL PRIMARY KEY,
+			vendor TEXT,
+			product TEXT,
+			vulnerability_name TEXT,
+			date_added DATE,
+			short_description TEXT,
+			synced_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES
+			('cve_scan_interval_hours', '6'),
+			('cve_cache_ttl_hours',     '24'),
+			('cve_winget_cpe_map',      '')`,
 	}},
 }
 
@@ -1448,6 +1497,336 @@ func (d *DB) DeleteSession(id string) error {
 func (d *DB) PurgeExpiredSessions() error {
 	_, err := d.sql.Exec("DELETE FROM sessions WHERE expires_at < CURRENT_TIMESTAMP")
 	return err
+}
+
+// -- CVE scanning -----------------------------------------------------------
+
+// CVEEntry is one vulnerability finding. Stored as part of the JSON blob in
+// cve_cache.cves_json so the scanner can diff by CVE id cheaply.
+type CVEEntry struct {
+	ID           string  `json:"id"`
+	Severity     string  `json:"severity,omitempty"` // "CRITICAL" / "HIGH" / "MEDIUM" / "LOW" / "UNKNOWN"
+	CVSS         float64 `json:"cvss,omitempty"`
+	Summary      string  `json:"summary,omitempty"`
+	FixedVersion string  `json:"fixed_version,omitempty"`
+	Published    string  `json:"published,omitempty"` // ISO date
+	Source       string  `json:"source,omitempty"`    // "osv" / "nvd"
+}
+
+// CVECacheEntry is one row of cve_cache, with CVEs already decoded.
+type CVECacheEntry struct {
+	PackageID string
+	Version   string
+	Source    string
+	CVEs      []CVEEntry
+	ScannedAt time.Time
+}
+
+// GetCVECache returns the cached CVE list for (pkg_id, version), or nil if
+// there is no row. Does not check freshness — caller decides.
+func (d *DB) GetCVECache(pkgID, version string) (*CVECacheEntry, error) {
+	var (
+		src       string
+		j         sql.NullString
+		scannedAt time.Time
+	)
+	err := d.sql.QueryRow(
+		"SELECT source, cves_json, scanned_at FROM cve_cache WHERE package_id=? AND version=?",
+		pkgID, version).Scan(&src, &j, &scannedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	e := &CVECacheEntry{
+		PackageID: pkgID,
+		Version:   version,
+		Source:    src,
+		ScannedAt: scannedAt,
+	}
+	if j.Valid && j.String != "" {
+		if err := json.Unmarshal([]byte(j.String), &e.CVEs); err != nil {
+			return nil, fmt.Errorf("decode cve_cache row: %w", err)
+		}
+	}
+	return e, nil
+}
+
+// UpsertCVECache stores the result of a scan for (pkg_id, version). An empty
+// cves slice is valid and means "no known CVEs" — we still write the row so
+// we don't re-query on every scan cycle.
+func (d *DB) UpsertCVECache(pkgID, version, source string, cves []CVEEntry) error {
+	raw, err := json.Marshal(cves)
+	if err != nil {
+		return err
+	}
+	q := `INSERT INTO cve_cache (package_id, version, source, cves_json, scanned_at)
+	      VALUES (?,?,?,?,CURRENT_TIMESTAMP)
+	      ON DUPLICATE KEY UPDATE source=VALUES(source), cves_json=VALUES(cves_json), scanned_at=CURRENT_TIMESTAMP`
+	if d.driver == DriverSQLite {
+		q = `INSERT INTO cve_cache (package_id, version, source, cves_json, scanned_at)
+		     VALUES (?,?,?,?,CURRENT_TIMESTAMP)
+		     ON CONFLICT(package_id, version) DO UPDATE SET source=excluded.source, cves_json=excluded.cves_json, scanned_at=CURRENT_TIMESTAMP`
+	}
+	_, err = d.sql.Exec(q, pkgID, version, source, string(raw))
+	return err
+}
+
+// UniquePackageVersions returns every distinct (package_id, version) pair
+// currently seen in installed_software. Rows with blank pkg_id/version are
+// skipped — they can't be scanned.
+func (d *DB) UniquePackageVersions() ([]struct{ PackageID, Version string }, error) {
+	rows, err := d.sql.Query(`SELECT DISTINCT package_id, COALESCE(version,'') FROM installed_software
+	                          WHERE package_id<>'' AND version IS NOT NULL AND version<>''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []struct{ PackageID, Version string }
+	for rows.Next() {
+		var p, v string
+		if err := rows.Scan(&p, &v); err != nil {
+			return nil, err
+		}
+		out = append(out, struct{ PackageID, Version string }{p, v})
+	}
+	return out, rows.Err()
+}
+
+// StaleCVECacheKeys returns (pkg_id, version) pairs that either have no
+// cache row or a row older than the given TTL. Used by the scanner to pick
+// its work queue.
+func (d *DB) StaleCVECacheKeys(ttl time.Duration) ([]struct{ PackageID, Version string }, error) {
+	all, err := d.UniquePackageVersions()
+	if err != nil {
+		return nil, err
+	}
+	if len(all) == 0 {
+		return nil, nil
+	}
+	// Fetch all fresh keys in one query.
+	cutoff := time.Now().Add(-ttl).UTC().Format("2006-01-02 15:04:05")
+	rows, err := d.sql.Query("SELECT package_id, version FROM cve_cache WHERE scanned_at >= ?", cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	fresh := map[string]bool{}
+	for rows.Next() {
+		var p, v string
+		if err := rows.Scan(&p, &v); err != nil {
+			return nil, err
+		}
+		fresh[p+"\x00"+v] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]struct{ PackageID, Version string }, 0, len(all))
+	for _, k := range all {
+		if !fresh[k.PackageID+"\x00"+k.Version] {
+			out = append(out, k)
+		}
+	}
+	return out, nil
+}
+
+// CVEHostFinding is a per-host CVE row, joining installed_software × cve_cache
+// and enriched with the KEV flag.
+type CVEHostFinding struct {
+	Hostname    string  `json:"hostname"`
+	PackageID   string  `json:"package_id"`
+	PackageName string  `json:"package_name"`
+	Version     string  `json:"version"`
+	CVEID       string  `json:"cve_id"`
+	Severity    string  `json:"severity"`
+	CVSS        float64 `json:"cvss"`
+	Summary     string  `json:"summary"`
+	FixedIn     string  `json:"fixed_version,omitempty"`
+	Published   string  `json:"published,omitempty"`
+	Source      string  `json:"source,omitempty"`
+	KEV         bool    `json:"kev"`
+}
+
+// CVEFindingsForHost returns every CVE affecting the host's currently-
+// installed software. Empty if nothing is vulnerable or the scanner hasn't
+// run yet.
+func (d *DB) CVEFindingsForHost(hostname string) ([]CVEHostFinding, error) {
+	rows, err := d.sql.Query(`
+		SELECT s.hostname, s.package_id, COALESCE(s.package_name,''), COALESCE(s.version,''),
+		       c.cves_json
+		  FROM installed_software s
+		  JOIN cve_cache c ON c.package_id=s.package_id AND c.version=s.version
+		 WHERE s.hostname=?`, hostname)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	kev, err := d.GetKEVSet()
+	if err != nil {
+		return nil, err
+	}
+	var out []CVEHostFinding
+	for rows.Next() {
+		var host, pid, pname, ver string
+		var j sql.NullString
+		if err := rows.Scan(&host, &pid, &pname, &ver, &j); err != nil {
+			return nil, err
+		}
+		if !j.Valid || j.String == "" {
+			continue
+		}
+		var cves []CVEEntry
+		if err := json.Unmarshal([]byte(j.String), &cves); err != nil {
+			continue
+		}
+		for _, c := range cves {
+			out = append(out, CVEHostFinding{
+				Hostname:    host,
+				PackageID:   pid,
+				PackageName: pname,
+				Version:     ver,
+				CVEID:       c.ID,
+				Severity:    c.Severity,
+				CVSS:        c.CVSS,
+				Summary:     c.Summary,
+				FixedIn:     c.FixedVersion,
+				Published:   c.Published,
+				Source:      c.Source,
+				KEV:         kev[c.ID],
+			})
+		}
+	}
+	return out, rows.Err()
+}
+
+// CVESummaryStats is the dashboard top-bar roll-up.
+type CVESummaryStats struct {
+	OpenCVEs      int            `json:"open_cves"`
+	KEVCount      int            `json:"kev_count"`
+	AffectedHosts int            `json:"affected_hosts"`
+	BySeverity    map[string]int `json:"by_severity"`
+	LastScanAt    string         `json:"last_scan_at,omitempty"`
+}
+
+// CVESummary computes counters over the join of installed_software × cve_cache.
+// Cheap enough to run on every dashboard load for a few-thousand-row inventory.
+func (d *DB) CVESummary() (*CVESummaryStats, error) {
+	rows, err := d.sql.Query(`
+		SELECT s.hostname, c.cves_json
+		  FROM installed_software s
+		  JOIN cve_cache c ON c.package_id=s.package_id AND c.version=s.version`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	kev, err := d.GetKEVSet()
+	if err != nil {
+		return nil, err
+	}
+	sum := &CVESummaryStats{BySeverity: map[string]int{}}
+	hosts := map[string]bool{}
+	for rows.Next() {
+		var host string
+		var j sql.NullString
+		if err := rows.Scan(&host, &j); err != nil {
+			return nil, err
+		}
+		if !j.Valid || j.String == "" {
+			continue
+		}
+		var cves []CVEEntry
+		if err := json.Unmarshal([]byte(j.String), &cves); err != nil {
+			continue
+		}
+		for _, c := range cves {
+			sum.OpenCVEs++
+			if kev[c.ID] {
+				sum.KEVCount++
+			}
+			sev := strings.ToUpper(c.Severity)
+			if sev == "" {
+				sev = "UNKNOWN"
+			}
+			sum.BySeverity[sev]++
+			hosts[host] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sum.AffectedHosts = len(hosts)
+	var last sql.NullTime
+	_ = d.sql.QueryRow("SELECT MAX(scanned_at) FROM cve_cache").Scan(&last)
+	if last.Valid {
+		sum.LastScanAt = last.Time.UTC().Format(time.RFC3339)
+	}
+	return sum, nil
+}
+
+// -- CISA KEV --------------------------------------------------------------
+
+// KEVEntry is one CISA KEV catalog row.
+type KEVEntry struct {
+	CVEID             string
+	Vendor            string
+	Product           string
+	VulnerabilityName string
+	DateAdded         string // YYYY-MM-DD
+	ShortDescription  string
+}
+
+// UpsertKEV replaces the full KEV catalog with the given slice atomically.
+// The CISA feed is small (~1200 rows) so a full refresh is fine.
+func (d *DB) UpsertKEV(entries []KEVEntry) error {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	q := `INSERT INTO cve_kev (cve_id, vendor, product, vulnerability_name, date_added, short_description, synced_at)
+	      VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP)
+	      ON DUPLICATE KEY UPDATE vendor=VALUES(vendor), product=VALUES(product),
+	        vulnerability_name=VALUES(vulnerability_name), date_added=VALUES(date_added),
+	        short_description=VALUES(short_description), synced_at=CURRENT_TIMESTAMP`
+	if d.driver == DriverSQLite {
+		q = `INSERT INTO cve_kev (cve_id, vendor, product, vulnerability_name, date_added, short_description, synced_at)
+		     VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP)
+		     ON CONFLICT(cve_id) DO UPDATE SET vendor=excluded.vendor, product=excluded.product,
+		       vulnerability_name=excluded.vulnerability_name, date_added=excluded.date_added,
+		       short_description=excluded.short_description, synced_at=CURRENT_TIMESTAMP`
+	}
+	for _, e := range entries {
+		var da any
+		if e.DateAdded != "" {
+			da = e.DateAdded
+		}
+		if _, err := tx.Exec(q, e.CVEID, nullIfEmpty(e.Vendor), nullIfEmpty(e.Product),
+			nullIfEmpty(e.VulnerabilityName), da, nullIfEmpty(e.ShortDescription)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetKEVSet returns a set of CVE IDs present in the catalog, for cheap
+// lookups when building findings.
+func (d *DB) GetKEVSet() (map[string]bool, error) {
+	rows, err := d.sql.Query("SELECT cve_id FROM cve_kev")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
 
 // -- helpers ----------------------------------------------------------------
