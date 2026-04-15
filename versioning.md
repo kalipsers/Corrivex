@@ -55,6 +55,39 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.5.1 — Printable HTML reports + PDF via browser (Reports slice 2)
+
+**Patch** — adds a third output format to the report endpoints. No new
+server-side dependencies.
+
+- `format=html` on `GET /api/?action=report` returns a standalone,
+  self-contained HTML document — Lexend (headings) + Source Sans 3
+  (body), embedded Trust-&-Authority palette, Swiss-modernist grid,
+  WCAG AAA contrast. Works offline (no CDN beyond the fonts, with a
+  system-UI fallback if fonts.googleapis.com is blocked).
+- Every HTML report carries a tuned `@media print` stylesheet plus
+  `@page { size: A4; margin: 18mm 14mm }`:
+  - Print button, scope selector and other UI chrome hide.
+  - Table `<thead>` repeats on every printed page.
+  - Summary band collapses to a single row for compactness.
+  - All colour chips render as outlined text so severity/KEV indicators
+    stay legible in black-and-white print.
+  - Page footer (`@page @bottom-right`) shows `Corrivex · page <n>`.
+- "White mode" is enforced — the stylesheet ignores OS dark-mode
+  preferences so reports sent to print look identical on any browser.
+- Reports tab grows two new buttons per report card: **Open HTML**
+  (new tab) and **Print / PDF** (opens in a print-ready window and
+  triggers the browser print dialog immediately — the user then picks
+  "Save as PDF" as the destination).
+- Internal refactor: `internal/report` now exports `HTML(kind, rows,
+  scope, user) (*Output, error)`. Shared base template with partials
+  for cover header, summary band, data table.
+
+Browser print-to-PDF is sufficient for all three deliveries (download,
+email attachment in a future slice, webhook payload). A server-side
+renderer via `chromedp` can replace this in 1.5.3 if scheduled email
+delivery needs it.
+
 ### 1.5.0 — Reports tab + CSV/JSON export (Reports feature family, slice 1)
 
 **Minor** — starts a series of report-family slices (1.5.x). No schema

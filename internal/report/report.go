@@ -24,6 +24,7 @@ type Format string
 const (
 	FormatCSV  Format = "csv"
 	FormatJSON Format = "json"
+	FormatHTML Format = "html"
 )
 
 // utf8BOM is prepended to CSV output so Excel opens it as UTF-8 instead of
