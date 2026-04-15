@@ -99,6 +99,9 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case method == "POST" && action == "task_result":
 		s.taskResult(w, r)
 		return
+	case method == "GET" && action == "agent_config":
+		s.agentConfig(w, r)
+		return
 	// ---- auth endpoints (no session required) --------------------------
 	case method == "GET" && action == "auth_state":
 		s.authState(w, r)
@@ -572,6 +575,37 @@ func (s *Server) report(w http.ResponseWriter, r *http.Request) {
 		"agent_token":  token,
 		"agent_sha256": s.AgentSHA256,
 	})
+}
+
+// agentConfig returns the subset of server settings the agent needs to
+// run a full scan correctly — currently the registry-scan skip filters.
+// TOFU-token authenticated the same way ping/report are. Keys mirror
+// what the Settings tab writes, so FiltersFromSettings can consume the
+// response directly.
+func (s *Server) agentConfig(w http.ResponseWriter, r *http.Request) {
+	hostname := s.normalizeHost(r.URL.Query().Get("hostname"))
+	if hostname == "" {
+		writeJSON(w, 400, map[string]string{"error": "Missing hostname"})
+		return
+	}
+	if _, ok := s.authAgent(w, r, hostname); !ok {
+		return
+	}
+	keys := []string{
+		"reg_scan_skip_system_components",
+		"reg_scan_skip_kb_updates",
+		"reg_scan_skip_redistributables",
+		"reg_scan_skip_guid_names",
+		"reg_scan_skip_ms_publisher",
+		"reg_scan_min_name_length",
+		"reg_scan_custom_skip_patterns",
+		"reg_scan_custom_skip_publishers",
+	}
+	out := make(map[string]string, len(keys))
+	for _, k := range keys {
+		out[k] = s.DB.Setting(k, "")
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) taskResult(w http.ResponseWriter, r *http.Request) {

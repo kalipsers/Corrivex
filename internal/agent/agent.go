@@ -405,7 +405,7 @@ func (r *Runtime) fullScanWS(ctx context.Context) {
 	// registered with winget (classic MSI / EXE bundlers, vendor tooling)
 	// still appear in the inventory. Filters are the defaults for now —
 	// admin overrides from the Settings tab are wired in 1.6.1.
-	installed = mergeRegistry(installed, r.log)
+	installed = r.mergeRegistry(installed, r.log)
 	users := detectLocalUsers()
 	admins := detectLocalAdmins()
 
@@ -457,7 +457,7 @@ func (r *Runtime) FullScan() {
 	if err != nil {
 		r.log("winget list (installed) failed: %v", err)
 	}
-	installed = mergeRegistry(installed, r.log)
+	installed = r.mergeRegistry(installed, r.log)
 	users := detectLocalUsers()
 	admins := detectLocalAdmins()
 

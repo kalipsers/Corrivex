@@ -55,6 +55,42 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.6.2 — Agent consumes registry filters + cascade_state derivation
+
+**Patch** — closes two loops the 1.6.0 and 1.6.1 slices left half-wired.
+
+- **Filter settings actually apply.** New agent-facing endpoint
+  `GET /api/?action=agent_config` (TOFU token-authenticated) returns
+  the subset of server settings the agent needs: every
+  `reg_scan_*` key plus sensible defaults for anything unset. Agent
+  calls it at the start of every full scan and passes the result to
+  `regscan.FiltersFromSettings`. If the fetch fails, agent falls back
+  to `DefaultFilters` — same behaviour as 1.6.0.
+- **Cascade state populated.** During `SyncInstalledSoftware`, the
+  server now sets `installed_software.cascade_state` per row by
+  joining against `vendor_versions`:
+  - `winget` when `source in (winget, both)` and the vendor cache
+    has no matching package_key, or the installed version matches
+    the cached latest.
+  - `vendor_only` when the vendor cache has a matching key AND the
+    installed version is older than the cached latest.
+  - `unmanaged` when `source = registry` and no vendor cache
+    match — winget doesn't know the app and there's no
+    known automated update path.
+  - `unknown` otherwise.
+- Installed-software modal tab renders a coloured chip next to the
+  existing source label:
+  - `winget` → neutral grey
+  - `vendor_only` → amber ("out of date · vendor only")
+  - `unmanaged` → red ("unmanaged — manual update needed")
+- `GET /api/?action=installed_software` now returns
+  `cascade_state` per row.
+
+Next up (deferred to 1.7.0): actual cascade task dispatch — server
+picks the level per upgrade job instead of always invoking winget.
+That requires agent-side task-type changes (`upgrade_package_L3`,
+etc.) and is a minor bump.
+
 ### 1.6.1 — Update cascade: vendor version APIs + Unmanaged state
 
 **Minor** — adds new schema (migration 12), new task types, and a new

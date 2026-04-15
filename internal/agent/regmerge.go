@@ -3,11 +3,50 @@
 package agent
 
 import (
+	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/markov/corrivex/internal/regscan"
 	"github.com/markov/corrivex/internal/winget"
 )
+
+// fetchAgentConfig pulls the reg_scan_* settings from the server so the
+// next regscan uses the admin-configured filters, not just defaults.
+// Best-effort: on any failure we log and fall back to DefaultFilters.
+func (r *Runtime) fetchAgentConfig() map[string]string {
+	u := strings.TrimRight(r.Cfg.Server, "/") + "/api/?action=agent_config&hostname=" + mustHost()
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil
+	}
+	if r.Cfg.APISecret != "" {
+		req.Header.Set("X-API-Secret", r.Cfg.APISecret)
+	}
+	if r.Cfg.AgentToken != "" {
+		req.Header.Set("X-Corrivex-Token", r.Cfg.AgentToken)
+	}
+	cli := &http.Client{Timeout: 10 * time.Second}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+	var out map[string]string
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil
+	}
+	return out
+}
 
 // mergeRegistry supplements the winget inventory with entries from the
 // Windows uninstall registry trees. winget stays authoritative for apps
@@ -18,7 +57,7 @@ import (
 //
 // `logf` is the agent's WebSocket-backed log stream — used for one-line
 // visibility into how many rows came from each source.
-func mergeRegistry(winList []winget.Package, logf func(format string, a ...any)) []winget.Package {
+func (r *Runtime) mergeRegistry(winList []winget.Package, logf func(format string, a ...any)) []winget.Package {
 	// Set the default source on every winget row so the merge below can
 	// promote it to "both" cleanly.
 	for i := range winList {
@@ -27,7 +66,16 @@ func mergeRegistry(winList []winget.Package, logf func(format string, a ...any))
 		}
 	}
 
-	regList, err := regscan.ListInstalled(nil)
+	var filters *regscan.Filters
+	if cfg := r.fetchAgentConfig(); cfg != nil {
+		f := regscan.FiltersFromSettings(cfg)
+		filters = &f
+		logf("regscan config: fetched %d server-side settings", len(cfg))
+	} else {
+		logf("regscan config: using defaults (server fetch failed)")
+	}
+
+	regList, err := regscan.ListInstalled(filters)
 	if err != nil {
 		logf("registry scan failed: %v", err)
 		return winList

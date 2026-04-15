@@ -2034,12 +2034,28 @@ function renderInstalledList(list) {
     html += '<div class="inst" data-inst-row data-pkg-id="' + escapeHTML(id) + '" data-ver="' + escapeHTML(ver) + '" data-host="' + escapeHTML(it.hostname) + '" data-search="' + escapeHTML((name + ' ' + id).toLowerCase()) + '">';
     html += '<div><div class="inst-title">' + escapeHTML(name) + '</div><div class="inst-id">' + escapeHTML(id) + '</div></div>';
     html += '<span class="inst-version">' + escapeHTML(ver) + '</span>';
-    html += '<span class="inst-source">' + escapeHTML(src) + '</span>';
+    html += '<span class="inst-source">' + escapeHTML(src) + cascadeChipHTML(it) + '</span>';
     html += '<span class="inst-vendor" data-vendor-chip></span>';
     html += '</div>';
   }
   html += '</div>';
   wrap.innerHTML = html;
+}
+
+// cascadeChipHTML renders the small 1.6.2 chip describing what update
+// path Corrivex found for this row. Rendered server-side by deriving
+// from (source, vendor_versions) — see installedSoftwareSelect in db.go.
+function cascadeChipHTML(it) {
+  const state = (it.cascade_state || '').toLowerCase();
+  if (!state || state === 'unknown') return '';
+  const tip = {
+    winget:       'Corrivex can update this via winget.',
+    vendor_only:  'winget does not track the latest version; vendor latest: ' + (it.vendor_latest || '?') + ' (' + (it.vendor_channel || 'stable') + ').',
+    unmanaged:    'No automated update path found — this row came from the registry scan only and no vendor API tracks it. Update manually.',
+  }[state] || '';
+  const cls = state === 'unmanaged' ? 'danger' : state === 'vendor_only' ? 'warn' : 'muted';
+  const label = state === 'vendor_only' ? 'out of date' : state.replace('_', ' ');
+  return ' <span class="chip ' + cls + '" title="' + escapeHTML(tip) + '" style="margin-left:6px">' + escapeHTML(label) + '</span>';
 }
 
 function applyInstalledFilter() {

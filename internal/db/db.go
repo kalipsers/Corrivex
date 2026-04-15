@@ -1177,13 +1177,16 @@ func (d *DB) PackageCacheSet(query string, results []byte) {
 
 // InstalledSoftware is the current snapshot row for one host+package pair.
 type InstalledSoftware struct {
-	Hostname    string    `json:"hostname"`
-	PackageID   string    `json:"id"`
-	PackageName string    `json:"name"`
-	Version     string    `json:"version"`
-	Source      string    `json:"source"`
-	FirstSeen   time.Time `json:"first_seen"`
-	LastSeen    time.Time `json:"last_seen"`
+	Hostname      string    `json:"hostname"`
+	PackageID     string    `json:"id"`
+	PackageName   string    `json:"name"`
+	Version       string    `json:"version"`
+	Source        string    `json:"source"`
+	FirstSeen     time.Time `json:"first_seen"`
+	LastSeen      time.Time `json:"last_seen"`
+	CascadeState  string    `json:"cascade_state,omitempty"`  // "winget" | "vendor_only" | "unmanaged" | "unknown"
+	VendorLatest  string    `json:"vendor_latest,omitempty"`  // vendor cache's latest_version for this package_id (if known)
+	VendorChannel string    `json:"vendor_channel,omitempty"` // "stable" | "esr" | "lts" | ...
 }
 
 // SoftwareHistory is one entry in the append-only audit log for a (host,
@@ -1290,12 +1293,39 @@ func (d *DB) SyncInstalledSoftware(hostname string, incoming []map[string]any) e
 	return tx.Commit()
 }
 
+// installedSoftwareSelect is the shared projection used by
+// InstalledSoftwareForHost and AllInstalledSoftware. It LEFT JOINs
+// against vendor_versions so the cascade_state can be derived on the fly
+// without a second query or persisted column — the CASE expression
+// works identically in MariaDB and SQLite.
+const installedSoftwareSelect = `
+SELECT
+	s.hostname,
+	s.package_id,
+	s.package_name,
+	s.version,
+	s.source,
+	s.first_seen,
+	s.last_seen,
+	CASE
+		WHEN v.package_key IS NOT NULL AND v.latest_version IS NOT NULL
+		     AND v.latest_version <> s.version THEN 'vendor_only'
+		WHEN v.package_key IS NOT NULL THEN 'winget'
+		WHEN s.source = 'registry' THEN 'unmanaged'
+		WHEN s.source IN ('winget','both') THEN 'winget'
+		ELSE 'unknown'
+	END AS cascade_state,
+	COALESCE(v.latest_version, ''),
+	COALESCE(v.channel, '')
+FROM installed_software s
+LEFT JOIN vendor_versions v ON v.package_key = LOWER(s.package_id)
+`
+
 // InstalledSoftwareForHost returns the current snapshot for hostname,
 // alphabetically sorted by name.
 func (d *DB) InstalledSoftwareForHost(hostname string) ([]InstalledSoftware, error) {
-	rows, err := d.sql.Query(
-		"SELECT hostname, package_id, package_name, version, source, first_seen, last_seen FROM installed_software WHERE hostname=? ORDER BY LOWER(package_name), package_id",
-		hostname)
+	q := installedSoftwareSelect + "WHERE s.hostname=? ORDER BY LOWER(s.package_name), s.package_id"
+	rows, err := d.sql.Query(q, hostname)
 	if err != nil {
 		return nil, err
 	}
@@ -1304,7 +1334,8 @@ func (d *DB) InstalledSoftwareForHost(hostname string) ([]InstalledSoftware, err
 	for rows.Next() {
 		var s InstalledSoftware
 		var pname, ver, src sql.NullString
-		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen); err != nil {
+		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen,
+			&s.CascadeState, &s.VendorLatest, &s.VendorChannel); err != nil {
 			return nil, err
 		}
 		s.PackageName = pname.String
@@ -1930,8 +1961,8 @@ func (d *DB) AllHostnames() ([]string, error) {
 // every host, alphabetically sorted by hostname then package name. Used by
 // the Reports tab for fleet-wide exports.
 func (d *DB) AllInstalledSoftware() ([]InstalledSoftware, error) {
-	rows, err := d.sql.Query(
-		"SELECT hostname, package_id, package_name, version, source, first_seen, last_seen FROM installed_software ORDER BY hostname, LOWER(package_name), package_id")
+	q := installedSoftwareSelect + "ORDER BY s.hostname, LOWER(s.package_name), s.package_id"
+	rows, err := d.sql.Query(q)
 	if err != nil {
 		return nil, err
 	}
@@ -1940,7 +1971,8 @@ func (d *DB) AllInstalledSoftware() ([]InstalledSoftware, error) {
 	for rows.Next() {
 		var s InstalledSoftware
 		var pname, ver, src sql.NullString
-		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen); err != nil {
+		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen,
+			&s.CascadeState, &s.VendorLatest, &s.VendorChannel); err != nil {
 			return nil, err
 		}
 		s.PackageName = pname.String
