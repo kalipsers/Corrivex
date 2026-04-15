@@ -145,10 +145,12 @@ a:hover { color: var(--c-cta-hover); text-decoration: underline; }
 .stat-value {
   font-size: 32px; font-weight: 700; letter-spacing: -0.02em;
   color: var(--c-primary); line-height: 1; margin-bottom: 8px;
-  opacity: 0; transform: translateY(4px);
-  animation: statReveal 600ms var(--ease) forwards;
+  animation: statReveal 600ms var(--ease) both;
 }
-@keyframes statReveal { to { opacity: 1; transform: none; } }
+@keyframes statReveal {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
 .stat-hint { font-size: 12px; color: var(--c-muted); }
 .stat.is-updates .pulse {
   display: inline-block; width: 8px; height: 8px; border-radius: 999px;

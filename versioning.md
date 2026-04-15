@@ -55,6 +55,19 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.4.3 — Fix invisible stat counters under prefers-reduced-motion
+
+**Patch**
+
+The top-bar stat counters (Managed devices / Pending updates / Up to date /
+Never seen) were invisible for users with OS-level "reduce motion" enabled.
+Root cause: `.stat-value` set `opacity: 0` statically and relied on the
+`statReveal` keyframe to fade them in, but the global
+`@media (prefers-reduced-motion: reduce)` rule disables all animations —
+so the element stayed at `opacity: 0`. Moved the initial state into the
+keyframe's `from` step with `animation-fill-mode: both`, so when animations
+are disabled the element falls back to its default visible state.
+
 ### 1.4.2 — Drop distro-wrapped OSV entries + version-range filter
 
 **Patch**
