@@ -11,6 +11,7 @@ import (
 	"github.com/johnfercher/maroto/v2/pkg/components/text"
 	"github.com/johnfercher/maroto/v2/pkg/config"
 	"github.com/johnfercher/maroto/v2/pkg/consts/align"
+	"github.com/johnfercher/maroto/v2/pkg/consts/breakline"
 	"github.com/johnfercher/maroto/v2/pkg/consts/fontstyle"
 	"github.com/johnfercher/maroto/v2/pkg/consts/orientation"
 	"github.com/johnfercher/maroto/v2/pkg/consts/pagesize"
@@ -54,11 +55,17 @@ func buildPDF(kind string, rows any, scope, user string) ([]byte, error) {
 	title, subtitle := titleFor(kind)
 	totalRows, summary := summaryFor(kind, rows)
 
+	// Landscape for wide-column reports; portrait for local_admins.
+	orient := orientation.Vertical
+	if kind == "installed_software" || kind == "cve_findings" {
+		orient = orientation.Horizontal
+	}
+
 	cfg := config.NewBuilder().
 		WithPageSize(pagesize.A4).
-		WithOrientation(orientation.Vertical).
-		WithTopMargin(18).
-		WithBottomMargin(20).
+		WithOrientation(orient).
+		WithTopMargin(16).
+		WithBottomMargin(18).
 		WithLeftMargin(14).
 		WithRightMargin(14).
 		WithDefaultFont(&props.Font{Family: "Helvetica", Size: 9, Color: &inkColor}).
@@ -177,20 +184,28 @@ type tableCol struct {
 }
 
 func renderSoftwareTable(m core.Maroto, rows []db.InstalledSoftware) {
+	// Landscape A4 → ~269 mm usable width. Column proportions tuned for real
+	// inventory: long .NET / SQL Server IDs, hostnames up to ~20 chars.
 	addTableHead(m, []tableCol{
-		{"HOST", 2}, {"PACKAGE ID", 3}, {"NAME", 3}, {"VERSION", 2}, {"LAST SEEN", 2},
+		{"HOST", 2}, {"PACKAGE ID", 4}, {"NAME", 3}, {"VERSION", 2}, {"LAST SEEN", 1},
 	})
+	brk := breakline.DashStrategy
 	for i, r := range rows {
 		bg := (*props.Color)(nil)
 		if i%2 == 1 {
 			bg = &zebraColor
 		}
-		m.AddRow(4,
-			text.NewCol(2, r.Hostname, props.Text{Size: 8, Style: fontstyle.Bold, Left: 2, Top: 1}),
-			text.NewCol(3, r.PackageID, props.Text{Size: 7, Family: "Courier", Color: &inkColor2, Left: 2, Top: 1}),
-			text.NewCol(3, orDefault(r.PackageName, "—"), props.Text{Size: 8, Left: 2, Top: 1}),
-			text.NewCol(2, orDefault(r.Version, "—"), props.Text{Size: 7, Family: "Courier", Left: 2, Top: 1}),
-			text.NewCol(2, r.LastSeen.UTC().Format("2006-01-02"), props.Text{Size: 7, Family: "Courier", Color: &mutedColor, Left: 2, Top: 1}),
+		m.AddRow(5,
+			text.NewCol(2, truncate(r.Hostname, 26),
+				props.Text{Size: 8, Style: fontstyle.Bold, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+			text.NewCol(4, truncate(r.PackageID, 56),
+				props.Text{Size: 7, Family: "Courier", Color: &inkColor2, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+			text.NewCol(3, truncate(orDefault(r.PackageName, "—"), 42),
+				props.Text{Size: 8, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+			text.NewCol(2, truncate(orDefault(r.Version, "—"), 24),
+				props.Text{Size: 7, Family: "Courier", Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+			text.NewCol(1, r.LastSeen.UTC().Format("2006-01-02"),
+				props.Text{Size: 7, Family: "Courier", Color: &mutedColor, Left: 2, Top: 1.5}),
 		).WithStyle(&props.Cell{BackgroundColor: bg})
 	}
 }
@@ -199,6 +214,7 @@ func renderAdminsTable(m core.Maroto, rows []db.LocalAdminEntry) {
 	addTableHead(m, []tableCol{
 		{"HOST", 3}, {"DOMAIN", 2}, {"ACCOUNT", 4}, {"TYPE", 2}, {"ENABLED", 1},
 	})
+	brk := breakline.DashStrategy
 	for i, r := range rows {
 		bg := (*props.Color)(nil)
 		if i%2 == 1 {
@@ -210,12 +226,16 @@ func renderAdminsTable(m core.Maroto, rows []db.LocalAdminEntry) {
 			enabled = "yes"
 			enabledColor = &okColor
 		}
-		m.AddRow(4,
-			text.NewCol(3, r.Hostname, props.Text{Size: 8, Style: fontstyle.Bold, Left: 2, Top: 1}),
-			text.NewCol(2, orDefault(r.Domain, "—"), props.Text{Size: 7, Color: &mutedColor, Left: 2, Top: 1}),
-			text.NewCol(4, r.AccountName, props.Text{Size: 7, Family: "Courier", Left: 2, Top: 1}),
-			text.NewCol(2, orDefault(r.AccountType, "—"), props.Text{Size: 7, Color: &mutedColor, Left: 2, Top: 1}),
-			text.NewCol(1, enabled, props.Text{Size: 7, Color: enabledColor, Left: 2, Top: 1}),
+		m.AddRow(5,
+			text.NewCol(3, truncate(r.Hostname, 30),
+				props.Text{Size: 8, Style: fontstyle.Bold, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+			text.NewCol(2, truncate(orDefault(r.Domain, "—"), 22),
+				props.Text{Size: 7, Color: &mutedColor, Left: 2, Top: 1.5}),
+			text.NewCol(4, truncate(r.AccountName, 40),
+				props.Text{Size: 7, Family: "Courier", Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+			text.NewCol(2, truncate(orDefault(r.AccountType, "—"), 20),
+				props.Text{Size: 7, Color: &mutedColor, Left: 2, Top: 1.5}),
+			text.NewCol(1, enabled, props.Text{Size: 7, Color: enabledColor, Left: 2, Top: 1.5}),
 		).WithStyle(&props.Cell{BackgroundColor: bg})
 	}
 }
@@ -224,6 +244,7 @@ func renderCVETable(m core.Maroto, rows []db.CVEHostFinding) {
 	addTableHead(m, []tableCol{
 		{"HOST", 2}, {"CVE", 2}, {"SEV", 1}, {"PACKAGE", 3}, {"VER", 1}, {"FIXED", 1}, {"SUMMARY", 2},
 	})
+	brk := breakline.DashStrategy
 	for i, r := range rows {
 		bg := (*props.Color)(nil)
 		if i%2 == 1 {
@@ -234,14 +255,21 @@ func renderCVETable(m core.Maroto, rows []db.CVEHostFinding) {
 			sevLabel += "·KEV"
 			sevColor = &dangerColor
 		}
-		m.AddRow(5,
-			text.NewCol(2, r.Hostname, props.Text{Size: 7, Style: fontstyle.Bold, Left: 2, Top: 1}),
-			text.NewCol(2, r.CVEID, props.Text{Size: 6, Family: "Courier", Color: &inkColor2, Left: 2, Top: 1}),
-			text.NewCol(1, sevLabel, props.Text{Size: 6, Style: fontstyle.Bold, Color: sevColor, Left: 2, Top: 1}),
-			text.NewCol(3, orDefault(r.PackageName, r.PackageID), props.Text{Size: 7, Left: 2, Top: 1}),
-			text.NewCol(1, orDefault(r.Version, "—"), props.Text{Size: 6, Family: "Courier", Left: 2, Top: 1}),
-			text.NewCol(1, orDefault(r.FixedIn, "—"), props.Text{Size: 6, Family: "Courier", Color: &mutedColor, Left: 2, Top: 1}),
-			text.NewCol(2, truncate(r.Summary, 120), props.Text{Size: 6, Color: &inkColor2, Left: 2, Top: 1}),
+		m.AddRow(6,
+			text.NewCol(2, truncate(r.Hostname, 24),
+				props.Text{Size: 7, Style: fontstyle.Bold, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+			text.NewCol(2, truncate(r.CVEID, 22),
+				props.Text{Size: 7, Family: "Courier", Color: &inkColor2, Left: 2, Top: 1.5}),
+			text.NewCol(1, sevLabel,
+				props.Text{Size: 6, Style: fontstyle.Bold, Color: sevColor, Left: 2, Top: 1.5}),
+			text.NewCol(3, truncate(orDefault(r.PackageName, r.PackageID), 38),
+				props.Text{Size: 7, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+			text.NewCol(1, truncate(orDefault(r.Version, "—"), 14),
+				props.Text{Size: 6, Family: "Courier", Left: 2, Top: 1.5}),
+			text.NewCol(1, truncate(orDefault(r.FixedIn, "—"), 14),
+				props.Text{Size: 6, Family: "Courier", Color: &mutedColor, Left: 2, Top: 1.5}),
+			text.NewCol(2, truncate(r.Summary, 110),
+				props.Text{Size: 6, Color: &inkColor2, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
 		).WithStyle(&props.Cell{BackgroundColor: bg})
 	}
 }

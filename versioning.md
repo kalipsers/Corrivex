@@ -55,6 +55,32 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.5.3 — Fix PDF table overflow (landscape + truncate + widths)
+
+**Patch**
+
+The 1.5.2 PDF layout overflowed in portrait A4: long winget IDs
+(`Microsoft.SQLServer.OLEDBDriver.Backwards…`) and product names
+(`Microsoft ODBC Driver 17 for SQL Server`) bled into adjacent columns,
+so Host / Name / Version ran together. Maroto's text component renders
+unwrapped — unlike HTML it has no `word-break: anywhere` — so columns
+that were sized by proportion simply couldn't breathe.
+
+- `installed_software` and `cve_findings` PDFs now render in
+  **landscape A4** (297 mm wide). 12-grid column sizes rebalanced from
+  real inventory rows.
+- All overflow-prone strings (package IDs, names, versions, account
+  names, CVE summaries) are truncated with `…` at render-time. Limits
+  scale with column width and font size so the result fits even on
+  the longest entries.
+- Data rows gained `BreakLineStrategy: breakline.DashStrategy` so
+  narrow cells that still exceed their width break cleanly rather
+  than clipping.
+- `local_admins` remains portrait — its columns are already short
+  enough to fit in 210 mm.
+- Row height raised from 4 mm → 5 mm to give truncated text a little
+  breathing room and match the cover's visual rhythm.
+
 ### 1.5.2 — Pure-Go PDF export + per-host ZIP batch (Reports slice 3)
 
 **Patch** — adds real server-generated PDFs without a headless browser
