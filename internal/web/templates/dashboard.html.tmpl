@@ -1546,11 +1546,16 @@ function renderDeviceModal(pc) {
 
   html += '<section class="section" data-pkg-section>';
   html += '<div class="section-hd"><div class="section-title">Pending updates (' + pkgs.length + ')</div>';
+  html += '<div style="display:inline-flex;gap:8px;margin-left:auto">';
+  // Always render the refresh button — useful even when pkgs.length == 0
+  // to force-reconcile after an out-of-band upgrade.
+  html += '<button class="btn btn-sm btn-ghost" id="refresh-inventory-btn" data-action="full-scan" data-host="' + escapeHTML(pc.hostname) + '" title="Force the agent to re-run winget list + registry scan now. Useful when a package was upgraded outside Corrivex.">Refresh inventory</button>';
   if (pkgs.length > 0) {
     const allDisabled = !!allUpgradeState;
     const allLabel = allUpgradeState === 'pending' ? 'Upgrading all…' : allUpgradeState === 'delivered' ? 'Running…' : 'Upgrade all';
     html += '<button class="btn btn-sm btn-primary" id="upgrade-all-btn" data-action="upgrade-all" data-host="' + escapeHTML(pc.hostname) + '"' + (allDisabled ? ' disabled' : '') + '>' + escapeHTML(allLabel) + '</button>';
   }
+  html += '</div>';
   html += '</div>';
   if (pkgs.length === 0) {
     html += '<div class="card-empty">No pending updates.</div>';
@@ -2904,6 +2909,15 @@ document.addEventListener('click', async (e) => {
     setWURowStatus(btn.dataset.id, 'pending');
     popLogPane();
     return createTask({ hostname: btn.dataset.host, type: 'windows_update_single', package_id: btn.dataset.id, package_name: btn.dataset.name }, 'Windows Update queued');
+  }
+  if (a === 'full-scan') {
+    // Give the button a momentary "queued" look so users know the click landed.
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'Refreshing…';
+    setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 5000);
+    popLogPane();
+    return createTask({ hostname: btn.dataset.host, type: 'full_scan' }, 'Inventory refresh queued');
   }
   if (a === 'remove-domain') return removeDomain(btn.dataset.id);
 });

@@ -558,6 +558,14 @@ func (r *Runtime) RunTasks(tasks []TaskRequest) {
 			mutated = true
 		case "check":
 			out, code = "ok", 0
+		case "full_scan":
+			// Admin-initiated inventory refresh. Do a best-effort source
+			// refresh first so winget's upgrade-available list is accurate,
+			// then fire the same fullScanWS the scheduler uses. The fullScan
+			// runs via the `mutated` path below, not from here, so we just
+			// report success and rely on the post-batch rescan hook.
+			mutated = true
+			out, code = "refresh queued", 0
 		case "uninstall_self":
 			// Report success first, then kick off async cleanup and exit.
 			r.post("task_result", map[string]any{
@@ -585,6 +593,13 @@ func (r *Runtime) RunTasks(tasks []TaskRequest) {
 	}
 	if mutated {
 		r.log("re-scanning installed packages after %d task(s)", len(tasks))
+		// Refresh winget's source index so the subsequent list call sees
+		// the real post-upgrade state. Without this step winget sometimes
+		// reports a just-upgraded package as still upgradable for several
+		// seconds, which was leaving rows stuck in the dashboard.
+		if _, code := winget.SourceUpdate(); code != 0 {
+			r.log("  winget source update returned %s (non-fatal)", winget.ExitCodeResult(code))
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		r.fullScanWS(ctx)

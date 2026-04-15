@@ -55,6 +55,30 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.6.3 — Clear already-updated winget rows
+
+**Patch** — fixes two causes of stale rows in the Winget tab.
+
+1. **Agent-side:** after an upgrade/install/uninstall task mutates the
+   package set, the agent now runs `winget source update` before
+   re-running `winget list --upgrade-available` in the post-task
+   `fullScanWS`. Without the source refresh, winget's local index can
+   still report the just-upgraded version as "pending" for a few
+   seconds — the row lingered on the dashboard until the next full
+   scan (24 h by default).
+2. **Manual refresh:** new `full_scan` task type. The Winget tab grows
+   a small **Refresh inventory** button next to "Upgrade all"; clicking
+   it enqueues a `full_scan` task that the agent processes by running
+   `fullScanWS` directly. Covers the case where an admin upgraded a
+   package outside Corrivex (local cmd, vendor installer) and wants
+   the dashboard reconciled without waiting 24 hours.
+
+No schema change. Existing tasks table already accepts the new type
+via the `upgrade_all | upgrade_package | install_package | uninstall_package |
+check | uninstall_self | windows_update_all | windows_update_single`
+ENUM — we extend that ENUM in a new migration #13 to include
+`full_scan`.
+
 ### 1.6.2 — Agent consumes registry filters + cascade_state derivation
 
 **Patch** — closes two loops the 1.6.0 and 1.6.1 slices left half-wired.

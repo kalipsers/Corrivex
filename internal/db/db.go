@@ -335,6 +335,9 @@ var migrations = []struct {
 			('vendor_version_enabled', 'true'),
 			('vendor_version_interval_hours', '6')`,
 	}},
+	{13, "Add full_scan task type for manual inventory refresh", []string{
+		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single','full_scan') NOT NULL DEFAULT 'check'`,
+	}},
 }
 
 func (d *DB) Migrate() error {
@@ -565,6 +568,33 @@ var migrationsSQLite = []struct {
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES
 			('vendor_version_enabled', 'true'),
 			('vendor_version_interval_hours', '6')`,
+	}},
+	{13, "Add full_scan task type for manual inventory refresh", []string{
+		// SQLite can't ALTER a CHECK constraint — rebuild the table.
+		// Uses the documented 12-step recipe from sqlite.org, minimised
+		// for the case where no indexes or triggers depend on the old
+		// table. Keep the row order stable to preserve pending task FIFO.
+		`CREATE TABLE IF NOT EXISTS tasks_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL,
+			type TEXT NOT NULL DEFAULT 'check' CHECK (type IN (
+				'upgrade_all','upgrade_package','install_package','uninstall_package',
+				'check','uninstall_self','windows_update_all','windows_update_single',
+				'full_scan')),
+			package_id TEXT,
+			package_name TEXT,
+			package_version TEXT,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','delivered','completed','failed')),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			delivered_at DATETIME,
+			completed_at DATETIME,
+			result TEXT
+		)`,
+		`INSERT INTO tasks_new (id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result)
+		 SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result FROM tasks`,
+		`DROP TABLE tasks`,
+		`ALTER TABLE tasks_new RENAME TO tasks`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_host_status ON tasks(hostname, status)`,
 	}},
 }
 
