@@ -55,6 +55,34 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.6.0 — Registry software inventory + configurable skip filters
+
+**Minor** — agent now sees installers that winget doesn't. No schema
+change, no manual steps.
+
+Until 1.5.x the agent only ran `winget list`, which misses everything
+that was installed through a classic MSI / EXE bundler and never
+registered with the Microsoft Store. Those apps simply did not appear
+in the inventory at all.
+
+- New `internal/regscan` package reads the Windows uninstall trees
+  (HKLM + HKLM Wow6432Node + HKCU) and returns the per-host install list.
+- Filters strip the usual garbage: SystemComponent=1 entries,
+  Update/Hotfix ReleaseType values, KB-numbered rollups, Microsoft
+  redistributables, GUID-only DisplayNames, DisplayNames shorter than
+  `min_name_length`, plus admin-supplied regex patterns and publisher
+  exact matches.
+- Settings live in the `settings` table as `reg_scan_*` keys and can
+  be edited from the new **Settings → Registry scan filters** card.
+  Agent refetches them at the start of every full scan.
+- Merge strategy: winget is authoritative for known IDs; registry
+  entries that match a winget row (by DisplayName) flip that row's
+  `source` column to `both`; unmatched registry entries appear as new
+  rows with `source=registry` and a `reg:` prefix on their package_id.
+
+Expected impact: a typical Windows 11 workstation goes from ~20 winget
+rows to 60–120 total inventory entries.
+
 ### 1.5.5 — go mod tidy to unblock CI
 
 **Patch**

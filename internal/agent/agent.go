@@ -401,6 +401,11 @@ func (r *Runtime) fullScanWS(ctx context.Context) {
 	} else {
 		r.log("installed packages enumerated: %d", len(installed))
 	}
+	// Merge with the Windows uninstall registry trees so apps that never
+	// registered with winget (classic MSI / EXE bundlers, vendor tooling)
+	// still appear in the inventory. Filters are the defaults for now —
+	// admin overrides from the Settings tab are wired in 1.6.1.
+	installed = mergeRegistry(installed, r.log)
 	users := detectLocalUsers()
 	admins := detectLocalAdmins()
 
@@ -452,6 +457,7 @@ func (r *Runtime) FullScan() {
 	if err != nil {
 		r.log("winget list (installed) failed: %v", err)
 	}
+	installed = mergeRegistry(installed, r.log)
 	users := detectLocalUsers()
 	admins := detectLocalAdmins()
 

@@ -2,14 +2,14 @@
   "FixedFileInfo": {
     "FileVersion": {
       "Major": 1,
-      "Minor": 5,
-      "Patch": 5,
+      "Minor": 6,
+      "Patch": 0,
       "Build": 0
     },
     "ProductVersion": {
       "Major": 1,
-      "Minor": 5,
-      "Patch": 5,
+      "Minor": 6,
+      "Patch": 0,
       "Build": 0
     },
     "FileFlagsMask": "3f",
@@ -21,12 +21,12 @@
   "StringFileInfo": {
     "CompanyName": "Corrivex",
     "FileDescription": "Corrivex Agent — endpoint patch service",
-    "FileVersion": "1.5.5",
+    "FileVersion": "1.6.0",
     "InternalName": "corrivex-agent",
     "LegalCopyright": "© Corrivex contributors",
     "OriginalFilename": "corrivex-agent.exe",
     "ProductName": "Corrivex",
-    "ProductVersion": "1.5.5"
+    "ProductVersion": "1.6.0"
   },
   "VarFileInfo": {
     "Translation": {

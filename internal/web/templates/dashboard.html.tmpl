@@ -1100,6 +1100,46 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
         </div>
       </div>
     </div>
+
+    <!-- Registry scan filters (1.6.0+) -->
+    <div class="card" style="max-width:720px;margin-top:16px" data-admin-only>
+      <div class="card-hd">
+        <div>
+          <h2 class="h2">Registry scan filters</h2>
+          <div class="sub" style="color:var(--c-muted);font-size:12px;margin-top:4px">
+            Every full scan now reads HKLM + HKCU uninstall trees in addition to <code>winget list</code>. These filters suppress the usual noise. Settings apply fleet-wide on the next full scan.
+          </div>
+        </div>
+      </div>
+      <div class="card-bd">
+        <div class="field"><label><input type="checkbox" id="rs-skip-sys"> Skip <code>SystemComponent=1</code> entries (hidden from Add/Remove Programs)</label></div>
+        <div class="field"><label><input type="checkbox" id="rs-skip-kb"> Skip KB-numbered hotfixes and entries with <code>ReleaseType=Update|Hotfix|Security Update</code></label></div>
+        <div class="field"><label><input type="checkbox" id="rs-skip-redist"> Skip Microsoft Visual C++ / .NET redistributables and runtimes</label></div>
+        <div class="field"><label><input type="checkbox" id="rs-skip-guid"> Skip entries whose DisplayName is a bare <code>{GUID}</code></label></div>
+        <div class="field"><label><input type="checkbox" id="rs-skip-ms"> Skip entries published by Microsoft Corporation / Microsoft Windows <span class="sub" style="font-size:11px">(off by default)</span></label></div>
+        <div class="field">
+          <label for="rs-min-len">Minimum DisplayName length</label>
+          <input type="number" min="0" max="10" id="rs-min-len" style="max-width:6em">
+          <div class="hint">Rows whose DisplayName is shorter than this get dropped. <code>3</code> is safe.</div>
+        </div>
+        <div class="field">
+          <label for="rs-skip-patterns">Custom skip patterns <span class="sub" style="font-size:11px">(one case-insensitive regex per line)</span></label>
+          <textarea id="rs-skip-patterns" rows="4" placeholder="e.g. &#10;^Intel\(R\) &#10;^Dell "></textarea>
+          <div class="hint">Lines starting with <code>#</code> are ignored.</div>
+        </div>
+        <div class="field">
+          <label for="rs-skip-publishers">Custom skip publishers <span class="sub" style="font-size:11px">(one exact match per line, case-insensitive)</span></label>
+          <textarea id="rs-skip-publishers" rows="3" placeholder="e.g. &#10;Intel Corporation &#10;Dell Inc."></textarea>
+        </div>
+        <div style="margin-top:18px;display:flex;justify-content:flex-end;gap:8px">
+          <button class="btn btn-ghost" id="reset-regscan-btn" type="button">Reset to defaults</button>
+          <button class="btn btn-primary" id="save-regscan-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Save filters
+          </button>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- Users panel (admin only) -->
@@ -2846,6 +2886,91 @@ document.getElementById('save-settings-btn')?.addEventListener('click', async ()
     const json = await res.json();
     if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
     toast('Settings saved', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+});
+
+// ---- Registry scan filters (1.6.0+) --------------------------------------
+const regscanDefaults = {
+  reg_scan_skip_system_components: 'true',
+  reg_scan_skip_kb_updates:         'true',
+  reg_scan_skip_redistributables:   'true',
+  reg_scan_skip_guid_names:         'true',
+  reg_scan_skip_ms_publisher:       'false',
+  reg_scan_min_name_length:         '3',
+  reg_scan_custom_skip_patterns:    '',
+  reg_scan_custom_skip_publishers:  '',
+};
+
+function truthy(v) {
+  const s = String(v ?? '').toLowerCase().trim();
+  return s === '1' || s === 'true' || s === 'yes' || s === 'on';
+}
+
+async function loadRegscanSettings() {
+  const inputs = {
+    sys:        document.getElementById('rs-skip-sys'),
+    kb:         document.getElementById('rs-skip-kb'),
+    redist:     document.getElementById('rs-skip-redist'),
+    guid:       document.getElementById('rs-skip-guid'),
+    ms:         document.getElementById('rs-skip-ms'),
+    minLen:     document.getElementById('rs-min-len'),
+    patterns:   document.getElementById('rs-skip-patterns'),
+    publishers: document.getElementById('rs-skip-publishers'),
+  };
+  if (!inputs.sys) return;
+  try {
+    const res = await fetch(API + '?action=get_settings', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const s = await res.json();
+    const pick = (k) => s[k] ?? regscanDefaults[k];
+    inputs.sys.checked        = truthy(pick('reg_scan_skip_system_components'));
+    inputs.kb.checked         = truthy(pick('reg_scan_skip_kb_updates'));
+    inputs.redist.checked     = truthy(pick('reg_scan_skip_redistributables'));
+    inputs.guid.checked       = truthy(pick('reg_scan_skip_guid_names'));
+    inputs.ms.checked         = truthy(pick('reg_scan_skip_ms_publisher'));
+    inputs.minLen.value       = pick('reg_scan_min_name_length') || '3';
+    inputs.patterns.value     = pick('reg_scan_custom_skip_patterns') || '';
+    inputs.publishers.value   = pick('reg_scan_custom_skip_publishers') || '';
+  } catch (_) { /* best-effort — leave defaults */ }
+}
+// Load once the Settings tab becomes active.
+document.addEventListener('click', e => {
+  const t = e.target.closest('.tab');
+  if (t && t.dataset.tab === 'settings') loadRegscanSettings();
+});
+// Also load on page ready in case the deep-link lands on Settings.
+loadRegscanSettings();
+
+document.getElementById('reset-regscan-btn')?.addEventListener('click', () => {
+  document.getElementById('rs-skip-sys').checked        = truthy(regscanDefaults.reg_scan_skip_system_components);
+  document.getElementById('rs-skip-kb').checked         = truthy(regscanDefaults.reg_scan_skip_kb_updates);
+  document.getElementById('rs-skip-redist').checked     = truthy(regscanDefaults.reg_scan_skip_redistributables);
+  document.getElementById('rs-skip-guid').checked       = truthy(regscanDefaults.reg_scan_skip_guid_names);
+  document.getElementById('rs-skip-ms').checked         = truthy(regscanDefaults.reg_scan_skip_ms_publisher);
+  document.getElementById('rs-min-len').value           = regscanDefaults.reg_scan_min_name_length;
+  document.getElementById('rs-skip-patterns').value     = regscanDefaults.reg_scan_custom_skip_patterns;
+  document.getElementById('rs-skip-publishers').value   = regscanDefaults.reg_scan_custom_skip_publishers;
+});
+
+document.getElementById('save-regscan-btn')?.addEventListener('click', async () => {
+  const payload = {
+    reg_scan_skip_system_components: document.getElementById('rs-skip-sys').checked   ? 'true' : 'false',
+    reg_scan_skip_kb_updates:        document.getElementById('rs-skip-kb').checked    ? 'true' : 'false',
+    reg_scan_skip_redistributables:  document.getElementById('rs-skip-redist').checked? 'true' : 'false',
+    reg_scan_skip_guid_names:        document.getElementById('rs-skip-guid').checked  ? 'true' : 'false',
+    reg_scan_skip_ms_publisher:      document.getElementById('rs-skip-ms').checked    ? 'true' : 'false',
+    reg_scan_min_name_length:        document.getElementById('rs-min-len').value || '3',
+    reg_scan_custom_skip_patterns:   document.getElementById('rs-skip-patterns').value || '',
+    reg_scan_custom_skip_publishers: document.getElementById('rs-skip-publishers').value || '',
+  };
+  try {
+    const res = await fetch(API + '?action=set_settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload), credentials: 'same-origin',
+    });
+    const json = await res.json();
+    if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
+    toast('Registry filter settings saved', 'ok');
   } catch (e) { toast(e.message, 'err'); }
 });
 
