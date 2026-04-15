@@ -24,6 +24,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/markov/corrivex/internal/version"
+	"github.com/markov/corrivex/internal/choco"
 	"github.com/markov/corrivex/internal/winget"
 	"github.com/markov/corrivex/internal/winupdate"
 )
@@ -556,6 +557,34 @@ func (r *Runtime) RunTasks(tasks []TaskRequest) {
 			out, code = winupdate.InstallByID(ctx, t.PackageID, r.log)
 			cancel()
 			mutated = true
+		case "choco_install":
+			if err := choco.EnsureChoco(r.log); err != nil {
+				out, code = "chocolatey unavailable: "+err.Error(), -1
+			} else {
+				out, code = choco.RunInstall(stripChocoPrefix(t.PackageID), t.PackageVersion)
+				mutated = true
+			}
+		case "choco_upgrade":
+			if err := choco.EnsureChoco(r.log); err != nil {
+				out, code = "chocolatey unavailable: "+err.Error(), -1
+			} else {
+				out, code = choco.RunUpgrade(stripChocoPrefix(t.PackageID))
+				mutated = true
+			}
+		case "choco_upgrade_all":
+			if err := choco.EnsureChoco(r.log); err != nil {
+				out, code = "chocolatey unavailable: "+err.Error(), -1
+			} else {
+				out, code = choco.RunUpgradeAll()
+				mutated = true
+			}
+		case "choco_uninstall":
+			if err := choco.EnsureChoco(r.log); err != nil {
+				out, code = "chocolatey unavailable: "+err.Error(), -1
+			} else {
+				out, code = choco.RunUninstall(stripChocoPrefix(t.PackageID))
+				mutated = true
+			}
 		case "check":
 			out, code = "ok", 0
 		case "full_scan":

@@ -338,6 +338,9 @@ var migrations = []struct {
 	{13, "Add full_scan task type for manual inventory refresh", []string{
 		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single','full_scan') NOT NULL DEFAULT 'check'`,
 	}},
+	{14, "Add chocolatey task types", []string{
+		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single','full_scan','choco_install','choco_upgrade','choco_upgrade_all','choco_uninstall') NOT NULL DEFAULT 'check'`,
+	}},
 }
 
 func (d *DB) Migrate() error {
@@ -581,6 +584,31 @@ var migrationsSQLite = []struct {
 				'upgrade_all','upgrade_package','install_package','uninstall_package',
 				'check','uninstall_self','windows_update_all','windows_update_single',
 				'full_scan')),
+			package_id TEXT,
+			package_name TEXT,
+			package_version TEXT,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','delivered','completed','failed')),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			delivered_at DATETIME,
+			completed_at DATETIME,
+			result TEXT
+		)`,
+		`INSERT INTO tasks_new (id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result)
+		 SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result FROM tasks`,
+		`DROP TABLE tasks`,
+		`ALTER TABLE tasks_new RENAME TO tasks`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_host_status ON tasks(hostname, status)`,
+	}},
+	{14, "Add chocolatey task types", []string{
+		// Same table-rebuild dance as migration 13; SQLite cannot ALTER a CHECK.
+		`CREATE TABLE IF NOT EXISTS tasks_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL,
+			type TEXT NOT NULL DEFAULT 'check' CHECK (type IN (
+				'upgrade_all','upgrade_package','install_package','uninstall_package',
+				'check','uninstall_self','windows_update_all','windows_update_single',
+				'full_scan',
+				'choco_install','choco_upgrade','choco_upgrade_all','choco_uninstall')),
 			package_id TEXT,
 			package_name TEXT,
 			package_version TEXT,

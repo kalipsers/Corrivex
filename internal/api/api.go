@@ -1010,6 +1010,8 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		"uninstall_package": true, "check": true,
 		"windows_update_all": true, "windows_update_single": true,
 		"full_scan": true,
+		"choco_install": true, "choco_upgrade": true,
+		"choco_upgrade_all": true, "choco_uninstall": true,
 	}
 	if hostname == "" || !valid[body.Type] {
 		writeJSON(w, 400, map[string]string{"error": "Invalid input"})

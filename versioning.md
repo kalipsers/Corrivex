@@ -55,6 +55,57 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.7.0 — Chocolatey as a second package manager
+
+**Minor** — adds a full second package manager alongside winget, with
+no schema-breaking changes. Migration 14 extends the tasks.type enum
+only.
+
+The Chocolatey community repository has roughly 10× the package
+coverage of winget for Windows desktop software, with silent-install
+logic curated by each package's maintainer. Corrivex now uses choco
+wherever winget doesn't have a package.
+
+- New `internal/choco` package shelling out to `choco.exe`:
+  - `ListInstalled()` parses `choco list --local-only -r`
+  - `ListUpgrades()` parses `choco outdated -r`
+  - `RunInstall(id, version)`, `RunUpgrade(id)`, `RunUpgradeAll()`,
+    `RunUninstall(id)` wrap `choco install/upgrade/uninstall -y`
+    with `--no-progress` for cleaner log output.
+  - `EnsureChoco()` bootstraps Chocolatey on hosts that don't have
+    it via the official PowerShell install script (matching our
+    `EnsureWinget()` pattern). Runs once per agent install and again
+    if choco.exe goes missing.
+- Agent full scan now merges three inventories: winget →
+  chocolatey → registry. Package IDs from choco are namespaced
+  `choco:<id>` so they never collide with winget IDs. A package
+  found in multiple managers gets `source=winget+choco`,
+  `source=choco+registry`, etc.
+- Migration 14 — tasks.type enum extended with
+  `choco_install`, `choco_upgrade`, `choco_upgrade_all`,
+  `choco_uninstall`. SQLite rebuild via the 1.6.3 table-rename
+  pattern (CHECK constraints aren't alterable).
+- Agent's RunTasks switch adds the four choco cases. All four are
+  mutators → post-task rescan runs the now-standard
+  `winget source update` + fresh fullScanWS cycle (and the agent
+  will also `choco upgrade` refresh where relevant).
+
+Package ID schema reminder:
+  `winget`   — canonical winget ID (`Mozilla.Firefox`)
+  `choco:`   — prefixed chocolatey ID (`choco:firefox`)
+  `reg:`     — prefixed registry subkey name
+
+No dashboard-level UI breakage — the Winget tab still renders only
+winget-sourced rows (filtered by `source` containing "winget"),
+Installed Software tab shows all three. A full rework of the
+upgrade UI to expose chocolatey-initiated upgrades arrives in
+**1.7.3** once the base layer is shaken out.
+
+What's coming:
+- **1.7.1** — local-file installer with framework detection
+  (InnoSetup / NSIS / MSI / Squirrel / WiX Burn / InstallShield).
+- **1.7.2** — SMB credentials for network-share installer sources.
+
 ### 1.6.3 — Clear already-updated winget rows
 
 **Patch** — fixes two causes of stale rows in the Winget tab.
