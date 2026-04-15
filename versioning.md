@@ -55,6 +55,25 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.2.2 — Realistic WU sizes + persistent install state
+
+**Patch**
+
+- Windows Update size column was wildly wrong for cumulative updates
+  (KB5083769 reported as 92 GB on Win11 24H2). Root cause:
+  `IUpdate.MaxDownloadSize` is the bundle's worst-case sum across every
+  variant. The agent now prefers `MinDownloadSize` (the size of the variant
+  that actually applies to the host — same number Windows Settings shows)
+  and only falls back to `MaxDownloadSize` if `Min` is zero.
+- Once an update install task completes, the row used to disappear silently
+  on the next post-install rescan. Now the dashboard remembers per-modal-
+  session which update_ids were just installed and keeps the row visible
+  with an **installed** chip — or **reboot pending** when the install
+  reported `result_code=3010` — until the modal closes. Works for both
+  single-update installs and *Install all*. The remembered set is cleared
+  when you close the modal or switch to a different host so it can't bleed
+  state between sessions.
+
 ### 1.2.1 — Pull-from-Hub deployments + Docker Hub Overview
 
 **Patch** — packaging only, no runtime change.

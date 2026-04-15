@@ -158,11 +158,19 @@ try {
         foreach ($c in $u.Categories) { $cats += [string]$c.Name }
         $kbs = @()
         foreach ($k in $u.KBArticleIDs) { $kbs += [string]$k }
+        # MinDownloadSize is the size that will actually transfer for the
+        # applicable variant of this update — matches what Settings → Update
+        # shows. MaxDownloadSize is the bundle worst-case (sum of all
+        # variants), which can be tens of GB for cumulative updates and is
+        # almost never what the user downloads. Prefer Min, fall back to Max.
+        $minSize = [long]$u.MinDownloadSize
+        $maxSize = [long]$u.MaxDownloadSize
+        $size    = if ($minSize -gt 0) { $minSize } else { $maxSize }
         $out += [PSCustomObject]@{
             title           = [string]$u.Title
             description     = [string]$u.Description
             kb              = $kbs
-            size            = [long]$u.MaxDownloadSize
+            size            = $size
             severity        = [string]$u.MsrcSeverity
             is_downloaded   = [bool]$u.IsDownloaded
             reboot_required = [bool]$u.RebootRequired

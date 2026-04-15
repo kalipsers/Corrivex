@@ -1133,6 +1133,9 @@ function closeModal() {
   if (log) { log.innerHTML = ''; log.dataset.host = ''; }
   const wrap = document.getElementById('modal-log-wrap');
   if (wrap) wrap.classList.remove('is-live', 'is-pulse');
+  // Forget per-session installed Windows updates so the next host's modal
+  // doesn't show ghost rows from this one.
+  wuInstalledThisSession.clear();
 }
 
 // Scroll the live-output pane into view and briefly highlight it so the user
@@ -1165,6 +1168,7 @@ async function viewDevice(host) {
   if (log && log.dataset.host !== host) {
     log.innerHTML = '';
     log.dataset.host = host;
+    wuInstalledThisSession.clear();
   }
   openModal();
   try {
@@ -1177,9 +1181,34 @@ async function viewDevice(host) {
   }
 }
 
+// Per-modal-session memory of Windows updates that were installed via the
+// dashboard. Keyed by update_id. Cleared on closeModal(). Lets us keep
+// installed rows visible with an "installed" / "installed — reboot pending"
+// tag instead of having them silently disappear when the next full scan
+// reports the update gone.
+const wuInstalledThisSession = new Map();
+
 function renderDeviceModal(pc) {
   const pkgs = safeParse(pc.last_packages) || [];
-  const wu   = safeParse(pc.windows_updates) || [];
+  let wu = safeParse(pc.windows_updates) || [];
+  // Merge in updates that were installed this modal session but no longer
+  // appear in the current pending list (because the post-install rescan
+  // filtered them out). They are tagged so the row renders as installed.
+  if (wuInstalledThisSession.size > 0) {
+    const knownIDs = new Set(wu.map(u => u.update_id));
+    for (const [id, info] of wuInstalledThisSession) {
+      if (!knownIDs.has(id)) {
+        wu.push({
+          update_id: id,
+          title: info.title || '(installed update)',
+          kb: info.kb || [],
+          size: info.size || 0,
+          _installedTag: true,
+          _reboot: info.reboot,
+        });
+      }
+    }
+  }
   const users = safeParse(pc.users) || [];
   const admins = safeParse(pc.local_admins) || [];
   document.getElementById('device-modal-sub').textContent =
@@ -1293,23 +1322,35 @@ function renderDeviceModal(pc) {
     for (const u of wu) {
       const id = u.update_id || '';
       const sev = (u.severity || '').toLowerCase();
-      const effStatus = wuAllState || wuLiveStatus[id]?.status || '';
-      const rowCls = effStatus === 'pending' || effStatus === 'delivered' ? ' is-running' : '';
-      const disabled = effStatus === 'pending' || effStatus === 'delivered';
+      const installedHere = wuInstalledThisSession.get(id);
+      const effStatus = installedHere ? 'completed' : (wuAllState || wuLiveStatus[id]?.status || '');
+      const rowCls =
+        effStatus === 'pending' || effStatus === 'delivered' ? ' is-running' :
+        effStatus === 'completed' ? ' is-done' : '';
+      const disabled = effStatus === 'pending' || effStatus === 'delivered' || effStatus === 'completed';
       const sizeMB = u.size ? (Math.round((u.size/1024/1024)*10)/10).toFixed(1) + ' MB' : '';
       const kbs = Array.isArray(u.kb) ? u.kb.filter(Boolean) : [];
       const kbHTML = kbs.length ? kbs.map(k => '<span class="wu-kb">KB' + escapeHTML(k) + '</span>').join(' ') : '';
 
+      // Install state takes priority over the live "reboot_required" hint
+      // from WUA — once we've installed it, we know whether THIS install
+      // needs a reboot.
+      const rebootHere = installedHere ? installedHere.reboot : !!u.reboot_required;
+      const rebootMeta = rebootHere
+        ? ' · <span style="color:var(--c-warning);font-weight:600">reboot required</span>'
+        : '';
+
       html += '<div class="wu' + rowCls + '" data-wu-row="' + escapeHTML(id) + '">';
-      // col 1: icon-ish severity dot
       html += '<span class="wu-severity ' + escapeHTML(sev) + '">' + (u.severity ? escapeHTML(u.severity) : '&nbsp;') + '</span>';
-      // col 2: title + meta
       html += '<div><div class="wu-title">' + escapeHTML(u.title || '(untitled)') + '</div>';
-      html += '<div class="wu-meta">' + kbHTML + (kbHTML && sizeMB ? ' · ' : '') + (sizeMB ? escapeHTML(sizeMB) : '') + (u.reboot_required ? ' · <span style="color:var(--c-warning);font-weight:600">reboot required</span>' : '') + '</div></div>';
-      // col 3: status chip
-      html += '<span class="pkg-status" data-wu-status="' + escapeHTML(id) + '">' + pkgStatusChip(effStatus) + '</span>';
-      // col 4: install button
-      html += '<button class="btn btn-sm btn-cta-outline" data-action="wu-install-one" data-host="' + escapeHTML(pc.hostname) + '" data-id="' + escapeHTML(id) + '" data-name="' + escapeHTML(u.title || '') + '"' + (disabled?' disabled':'') + '>' + (disabled ? '…' : 'Install') + '</button>';
+      html += '<div class="wu-meta">' + kbHTML + (kbHTML && sizeMB ? ' · ' : '') + (sizeMB ? escapeHTML(sizeMB) : '') + rebootMeta + '</div></div>';
+      html += '<span class="pkg-status" data-wu-status="' + escapeHTML(id) + '">' + (installedHere ? installedChip(rebootHere) : pkgStatusChip(effStatus)) + '</span>';
+      // Install button replaced by a static label once installed.
+      if (installedHere) {
+        html += '<span class="btn btn-sm" style="cursor:default;opacity:.7" disabled>' + (rebootHere ? 'Reboot pending' : 'Installed') + '</span>';
+      } else {
+        html += '<button class="btn btn-sm btn-cta-outline" data-action="wu-install-one" data-host="' + escapeHTML(pc.hostname) + '" data-id="' + escapeHTML(id) + '" data-name="' + escapeHTML(u.title || '') + '"' + (disabled?' disabled':'') + '>' + (disabled ? '…' : 'Install') + '</button>';
+      }
       html += '</div>';
     }
     html += '</div>';
@@ -1499,8 +1540,28 @@ function handleWsEvent(ev) {
         setAllUpgradeState(ev.data.status);
       } else if (ev.data.type === 'windows_update_all') {
         setWUAllState(ev.data.status);
+        // Persist "all installed" so the rows stay tagged after the rescan.
+        if (ev.data.status === 'completed') {
+          const reboot = (ev.data.result || '').includes('reboot');
+          document.querySelectorAll('.wu[data-wu-row]').forEach(row => {
+            const id = row.dataset.wuRow;
+            if (!wuInstalledThisSession.has(id)) {
+              const titleEl = row.querySelector('.wu-title');
+              wuInstalledThisSession.set(id, { title: titleEl ? titleEl.textContent : '', reboot });
+            }
+            markWURowInstalled(id, reboot);
+          });
+        }
       } else if (ev.data.type === 'windows_update_single' && ev.data.package_id) {
         setWURowStatus(ev.data.package_id, ev.data.status, { flash: ev.data.status === 'completed' });
+        if (ev.data.status === 'completed') {
+          const reboot = (ev.data.result || '').includes('reboot');
+          wuInstalledThisSession.set(ev.data.package_id, {
+            title: ev.data.package_name || '',
+            reboot,
+          });
+          markWURowInstalled(ev.data.package_id, reboot);
+        }
       } else if (ev.data.package_id) {
         setPkgRowStatus(ev.data.package_id, ev.data.status, { flash: ev.data.status === 'completed' });
       }
@@ -1650,6 +1711,14 @@ function pkgStatusChip(status) {
   }
 }
 
+// Chip for an installed Windows update — green when no reboot is needed,
+// amber "reboot pending" when the install reported result_code 3010.
+function installedChip(reboot) {
+  return reboot
+    ? '<span class="chip warn" title="Installed — host needs a reboot to finish"><span class="dot"></span>reboot pending</span>'
+    : '<span class="chip ok" title="Installed"><span class="dot"></span>installed</span>';
+}
+
 // Update a single package row with a new task status (queued/running/done/failed).
 function setPkgRowStatus(pid, status, opts) {
   const row = document.querySelector('label.pkg[data-pkg-row="' + cssEscape(pid) + '"]');
@@ -1710,6 +1779,25 @@ function setWURowStatus(id, status, opts) {
   if (opts && opts.flash) {
     row.animate([{ background: '#DBEAFE' }, { background: getComputedStyle(row).backgroundColor }],
       { duration: 900, easing: 'ease-out' });
+  }
+}
+
+// Convert a WU row to its "installed" presentation in-place so the user sees
+// the change instantly, before the next pc event triggers a full re-render.
+function markWURowInstalled(id, reboot) {
+  const row = document.querySelector('.wu[data-wu-row="' + cssEscape(id) + '"]');
+  if (!row) return;
+  row.classList.remove('is-running');
+  row.classList.add('is-done');
+  const chip = row.querySelector('[data-wu-status]');
+  if (chip) chip.innerHTML = installedChip(reboot);
+  const btn = row.querySelector('button[data-action="wu-install-one"]');
+  if (btn) {
+    const span = document.createElement('span');
+    span.className = 'btn btn-sm';
+    span.style.cssText = 'cursor:default;opacity:.7';
+    span.textContent = reboot ? 'Reboot pending' : 'Installed';
+    btn.replaceWith(span);
   }
 }
 
