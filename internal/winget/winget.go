@@ -143,14 +143,42 @@ func ListInstalled() ([]Package, error) {
 	return parseListTable(out), nil
 }
 
-// RunUpgradeAll runs `winget upgrade --all --silent`.
+// commonFlags — flags we want on every install/upgrade/uninstall so winget
+// never blocks on an interactive prompt or a not-yet-accepted agreement.
+//
+// --silent                       — no TUI progress bar / prompts
+// --accept-source-agreements     — blanket-accept repo terms
+// --accept-package-agreements    — blanket-accept per-package EULAs
+// --disable-interactivity        — fail fast rather than wait on stdin
+//                                   (added in winget 1.1; older builds
+//                                   ignore unknown flags with a warning)
+var commonFlags = []string{
+	"--silent",
+	"--accept-source-agreements",
+	"--accept-package-agreements",
+	"--disable-interactivity",
+}
+
+// SourceUpdate refreshes the local index and re-asserts blanket acceptance
+// of every configured source's agreement. Fire this before an install/upgrade
+// to dodge stale-source-agreement traps that otherwise trigger
+// APPINSTALLER_CLI_ERROR_PACKAGE_AGREEMENTS_NOT_ACCEPTED (0x8A150111).
+func SourceUpdate() (string, int) {
+	wg := Find()
+	if wg == "" {
+		return "winget not found", -1
+	}
+	return runWinget2(wg, "source", "update", "--accept-source-agreements", "--disable-interactivity")
+}
+
+// RunUpgradeAll runs `winget upgrade --all` with the blanket-accept flags.
 func RunUpgradeAll() (string, int) {
 	wg := Find()
 	if wg == "" {
 		return "winget not found", -1
 	}
-	out, code := runWinget2(wg, "upgrade", "--all", "--silent", "--include-unknown", "--accept-source-agreements", "--accept-package-agreements")
-	return out, code
+	args := append([]string{"upgrade", "--all", "--include-unknown"}, commonFlags...)
+	return runWinget2(wg, args...)
 }
 
 // RunUpgradeID upgrades one package.
@@ -159,8 +187,8 @@ func RunUpgradeID(id string) (string, int) {
 	if wg == "" {
 		return "winget not found", -1
 	}
-	out, code := runWinget2(wg, "upgrade", "--id", id, "--silent", "--accept-source-agreements", "--accept-package-agreements")
-	return out, code
+	args := append([]string{"upgrade", "--id", id}, commonFlags...)
+	return runWinget2(wg, args...)
 }
 
 // RunInstall installs a package (optional version).
@@ -169,7 +197,7 @@ func RunInstall(id, version string) (string, int) {
 	if wg == "" {
 		return "winget not found", -1
 	}
-	args := []string{"install", "--id", id, "--silent", "--accept-source-agreements", "--accept-package-agreements"}
+	args := append([]string{"install", "--id", id}, commonFlags...)
 	if version != "" {
 		args = append(args, "--version", version)
 	}
@@ -182,7 +210,8 @@ func RunUninstall(id string) (string, int) {
 	if wg == "" {
 		return "winget not found", -1
 	}
-	return runWinget2(wg, "uninstall", "--id", id, "--silent", "--accept-source-agreements")
+	args := append([]string{"uninstall", "--id", id}, commonFlags...)
+	return runWinget2(wg, args...)
 }
 
 // EnsureInstalled returns the path to winget.exe. If winget isn't present

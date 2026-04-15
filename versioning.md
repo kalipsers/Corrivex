@@ -55,6 +55,29 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.3.2 — Auto-mitigate package_agreements_not_accepted
+
+**Patch**
+
+Winget occasionally refuses to install/upgrade with
+`0x8A150111 PACKAGE_AGREEMENTS_NOT_ACCEPTED` even when we already pass
+`--accept-package-agreements` — usually because a source agreement went
+stale or a non-TTY context tripped the prompt code path. Three layered
+mitigations now paper over it:
+
+- **`--disable-interactivity`** added to every winget install / upgrade /
+  uninstall / source-update invocation so winget never blocks waiting on
+  a prompt that can't happen anyway.
+- **`SourceUpdate()`** helper (`winget source update --accept-source-
+  agreements`) exposed to the agent.
+- **Retry-once on `0x8A150111`**: on the first failure with that exit
+  code, the agent runs `SourceUpdate()` and retries the operation exactly
+  once. A log line is streamed to the dashboard so you can see the
+  fallback happened.
+
+No protocol or schema changes — existing agents pick this up at their
+next self-update.
+
 ### 1.3.1 — Decodeable winget exit codes + timezone
 
 **Patch**

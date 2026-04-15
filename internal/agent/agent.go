@@ -499,6 +499,24 @@ func (r *Runtime) postTaskReport() {
 	}
 }
 
+// wingetRetry calls fn once, and — if winget came back with
+// APPINSTALLER_CLI_ERROR_PACKAGE_AGREEMENTS_NOT_ACCEPTED (0x8A150111) —
+// refreshes source state and retries once. This catches the case where a
+// stale source-agreement record made winget refuse even though our flag
+// set already includes --accept-*-agreements.
+func (r *Runtime) wingetRetry(fn func() (string, int)) (string, int) {
+	out, code := fn()
+	const agreementsErr = -1978334959 // 0x8A150111
+	if code == agreementsErr {
+		r.log("  → package agreements refused; refreshing sources and retrying once")
+		if _, sc := winget.SourceUpdate(); sc != 0 {
+			r.log("    source update returned %s", winget.ExitCodeResult(sc))
+		}
+		out, code = fn()
+	}
+	return out, code
+}
+
 // RunTasks executes tasks and posts results. After the batch finishes, if any
 // task mutated the installed-package set (upgrade/install/uninstall), the
 // agent re-runs `winget upgrade` and pushes a post_task_report so the server
@@ -511,16 +529,16 @@ func (r *Runtime) RunTasks(tasks []TaskRequest) {
 		var code int
 		switch t.Type {
 		case "upgrade_all":
-			out, code = winget.RunUpgradeAll()
+			out, code = r.wingetRetry(winget.RunUpgradeAll)
 			mutated = true
 		case "upgrade_package":
-			out, code = winget.RunUpgradeID(t.PackageID)
+			out, code = r.wingetRetry(func() (string, int) { return winget.RunUpgradeID(t.PackageID) })
 			mutated = true
 		case "install_package":
-			out, code = winget.RunInstall(t.PackageID, t.PackageVersion)
+			out, code = r.wingetRetry(func() (string, int) { return winget.RunInstall(t.PackageID, t.PackageVersion) })
 			mutated = true
 		case "uninstall_package":
-			out, code = winget.RunUninstall(t.PackageID)
+			out, code = r.wingetRetry(func() (string, int) { return winget.RunUninstall(t.PackageID) })
 			mutated = true
 		case "windows_update_all":
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
