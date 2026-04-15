@@ -837,6 +837,10 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/><path d="M2 12h20"/></svg>
       Allowed domains
     </button>
+    <button class="tab" data-tab="reports" role="tab" aria-selected="false">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/><line x1="10" x2="8" y1="9" y2="9"/></svg>
+      Reports
+    </button>
     <button class="tab" data-tab="settings" role="tab" aria-selected="false">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
       Settings
@@ -977,6 +981,80 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
           </tbody>
         </table>
       </div>
+    </div>
+  </section>
+
+  <!-- Reports panel -->
+  <section class="tab-panel" id="panel-reports" role="tabpanel">
+    <section class="stats" style="margin-bottom:24px">
+      <div class="stat">
+        <div class="stat-label">Managed devices</div>
+        <div class="stat-value" id="rep-stat-devices">—</div>
+        <div class="stat-hint">Hosts in inventory</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Installed packages</div>
+        <div class="stat-value" id="rep-stat-pkgs">—</div>
+        <div class="stat-hint">Across the fleet</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Local administrators</div>
+        <div class="stat-value" id="rep-stat-admins">—</div>
+        <div class="stat-hint">Distinct accounts with admin</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Open CVEs</div>
+        <div class="stat-value" id="rep-stat-cves">—</div>
+        <div class="stat-hint">Fleet-wide findings</div>
+      </div>
+    </section>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-hd"><div class="card-title">Installed software</div>
+        <div class="sub" style="font-size:12px">Full inventory of winget-tracked software per host, with version and source.</div>
+      </div>
+      <div class="card-bd" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+        <label class="sub" style="font-size:12px">Scope
+          <select class="input" id="rep-software-scope" style="margin-left:8px;min-width:220px">
+            <option value="all">Entire fleet</option>
+          </select>
+        </label>
+        <span style="flex:1"></span>
+        <a class="btn btn-sm btn-primary" id="rep-software-csv" download>Download CSV</a>
+        <a class="btn btn-sm btn-ghost" id="rep-software-json" download>Download JSON</a>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-hd"><div class="card-title">Local administrators</div>
+        <div class="sub" style="font-size:12px">Fleet-wide flattened list of every (host, admin account) pair captured on the last full scan.</div>
+      </div>
+      <div class="card-bd" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+        <span style="flex:1"></span>
+        <a class="btn btn-sm btn-primary" id="rep-admins-csv" href="/api/?action=report&type=local_admins&format=csv" download>Download CSV</a>
+        <a class="btn btn-sm btn-ghost" id="rep-admins-json" href="/api/?action=report&type=local_admins&format=json" download>Download JSON</a>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-hd"><div class="card-title">CVE findings</div>
+        <div class="sub" style="font-size:12px">Every CVE affecting the host's installed software, joined against the scanner cache. KEV flag included.</div>
+      </div>
+      <div class="card-bd" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+        <label class="sub" style="font-size:12px">Scope
+          <select class="input" id="rep-cve-scope" style="margin-left:8px;min-width:220px">
+            <option value="all">Entire fleet</option>
+          </select>
+        </label>
+        <span style="flex:1"></span>
+        <a class="btn btn-sm btn-primary" id="rep-cve-csv" download>Download CSV</a>
+        <a class="btn btn-sm btn-ghost" id="rep-cve-json" download>Download JSON</a>
+      </div>
+    </div>
+
+    <div class="sub" style="font-size:12px;color:var(--c-muted);margin-top:12px">
+      CSV exports include a UTF-8 BOM so Excel opens them correctly.
+      JSON is pretty-printed. Filenames include the report type, scope, and date.
     </div>
   </section>
 
@@ -2080,6 +2158,72 @@ connectWS();
 // Populate the fleet-wide CVE badge once at page load; further updates
 // arrive via the 'cve_scan_done' WS event above.
 loadCVEBadge();
+
+// ---- Reports tab ---------------------------------------------------------
+function populateReportsHostSelectors() {
+  const hosts = [];
+  document.querySelectorAll('#device-table tbody tr[data-host]').forEach(tr => {
+    const h = tr.dataset.host;
+    if (h) hosts.push(h);
+  });
+  hosts.sort((a, b) => a.localeCompare(b));
+  ['rep-software-scope', 'rep-cve-scope'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    // Preserve the "Entire fleet" option at the top and append hosts.
+    while (sel.options.length > 1) sel.remove(1);
+    for (const h of hosts) {
+      const opt = document.createElement('option');
+      opt.value = h; opt.textContent = h;
+      sel.appendChild(opt);
+    }
+  });
+}
+
+function updateReportLinks() {
+  const build = (type, fmt, scope) => {
+    let u = '/api/?action=report&type=' + encodeURIComponent(type) + '&format=' + fmt;
+    if (scope && scope !== 'all') u += '&host=' + encodeURIComponent(scope);
+    return u;
+  };
+  const swScope = document.getElementById('rep-software-scope')?.value || 'all';
+  const cveScope = document.getElementById('rep-cve-scope')?.value || 'all';
+  const set = (id, href) => { const el = document.getElementById(id); if (el) el.href = href; };
+  set('rep-software-csv',  build('installed_software', 'csv',  swScope));
+  set('rep-software-json', build('installed_software', 'json', swScope));
+  set('rep-cve-csv',       build('cve_findings',       'csv',  cveScope));
+  set('rep-cve-json',      build('cve_findings',       'json', cveScope));
+}
+
+async function loadReportsSummary() {
+  try {
+    const res = await fetch(API + '?action=reports_summary', { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const s = await res.json();
+    const setN = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v ?? 0); };
+    setN('rep-stat-devices', s.devices);
+    setN('rep-stat-pkgs',    s.installed_packages);
+    setN('rep-stat-admins',  s.distinct_local_admins);
+    setN('rep-stat-cves',    s.open_cves);
+  } catch (_) { /* best effort */ }
+}
+
+// Hook into tab switching — refresh when Reports becomes active.
+document.addEventListener('click', e => {
+  const t = e.target.closest('.tab');
+  if (t && t.dataset.tab === 'reports') {
+    populateReportsHostSelectors();
+    updateReportLinks();
+    loadReportsSummary();
+  }
+});
+document.addEventListener('change', e => {
+  if (e.target.id === 'rep-software-scope' || e.target.id === 'rep-cve-scope') {
+    updateReportLinks();
+  }
+});
+// Initial population in case the user deep-links to #reports.
+updateReportLinks();
 
 // ---- Live row update ------------------------------------------------------
 function renderOrUpdateRow(pc) {

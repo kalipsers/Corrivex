@@ -25,6 +25,7 @@ import (
 	"github.com/markov/corrivex/internal/db"
 	"github.com/markov/corrivex/internal/events"
 	"github.com/markov/corrivex/internal/hub"
+	"github.com/markov/corrivex/internal/report"
 	"github.com/markov/corrivex/internal/version"
 )
 
@@ -170,6 +171,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.cveSummary(w, r)
 	case method == "POST" && action == "rescan_cves":
 		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.rescanCVEs)
+	case method == "GET" && action == "reports_summary":
+		s.reportsSummary(w, r)
+	case method == "GET" && action == "report":
+		s.requireRoleReq(w, r, user, auth.RoleOperator, s.downloadReport)
 	case method == "GET" && r.URL.Query().Get("host") != "":
 		s.singlePC(w, r)
 	case method == "GET":
@@ -1140,6 +1145,80 @@ func (s *Server) cveSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, sum)
+}
+
+// reportsSummary returns the four counters rendered on the Reports tab's
+// top cards. Cheap; recalculated on every load.
+func (s *Server) reportsSummary(w http.ResponseWriter, r *http.Request) {
+	sum, err := s.DB.ReportsSummary()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, sum)
+}
+
+// downloadReport assembles an export and streams it back with a
+// Content-Disposition filename. Query parameters:
+//
+//	type   = installed_software | local_admins | cve_findings
+//	format = csv | json
+//	scope  = all (default) | host=HOST (single host, only for installed_software + cve_findings)
+func (s *Server) downloadReport(w http.ResponseWriter, r *http.Request) {
+	typ := r.URL.Query().Get("type")
+	format := report.Format(r.URL.Query().Get("format"))
+	if format == "" {
+		format = report.FormatCSV
+	}
+	host := s.normalizeHost(r.URL.Query().Get("host"))
+	scope := host
+	if scope == "" {
+		scope = "fleet"
+	}
+
+	var out *report.Output
+	var err error
+	switch typ {
+	case "installed_software":
+		var rows []db.InstalledSoftware
+		if host != "" {
+			rows, err = s.DB.InstalledSoftwareForHost(host)
+		} else {
+			rows, err = s.DB.AllInstalledSoftware()
+		}
+		if err == nil {
+			out, err = report.InstalledSoftware(rows, format, scope)
+		}
+	case "local_admins":
+		// Always fleet-wide — per-host is a trivial filter in the spreadsheet.
+		rows, e := s.DB.LocalAdminsAllHosts()
+		err = e
+		if err == nil {
+			out, err = report.LocalAdmins(rows, format, "fleet")
+		}
+	case "cve_findings":
+		var rows []db.CVEHostFinding
+		if host != "" {
+			rows, err = s.DB.CVEFindingsForHost(host)
+		} else {
+			rows, err = s.DB.AllCVEFindings()
+		}
+		if err == nil {
+			out, err = report.CVEFindings(rows, format, scope)
+		}
+	default:
+		writeJSON(w, 400, map[string]string{"error": "unknown report type; expected installed_software | local_admins | cve_findings"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", out.ContentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, out.Filename))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(200)
+	w.Write(out.Body)
 }
 
 // rescanCVEs wakes the scanner. Admin-only. Returns immediately — the

@@ -55,6 +55,37 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.5.0 — Reports tab + CSV/JSON export (Reports feature family, slice 1)
+
+**Minor** — starts a series of report-family slices (1.5.x). No schema
+change; all existing data is re-used through a new `internal/report`
+package and a new top-level **Reports** tab in the dashboard.
+
+- `internal/report` encodes three data sources to CSV or JSON:
+  - **Installed software** — fleet-wide or single-host snapshot from
+    `installed_software`.
+  - **Local administrators** — extracted per host from `pcs.local_admins`
+    (already populated by every full scan).
+  - **CVE findings** — joins `installed_software` × `cve_cache` × `cve_kev`
+    just like the Security modal, but in a flat export-friendly shape.
+- Three new session-gated API endpoints (`GET /api/?action=report&type=…&format=…`):
+  - `type=installed_software|local_admins|cve_findings`
+  - `format=csv|json`
+  - `scope=all` (fleet-wide) or `host=HOST` (single host)
+  - CSV comes as `text/csv; charset=utf-8` with a BOM so Excel picks up
+    UTF-8 correctly. JSON is pretty-printed.
+- New **Reports** dashboard tab — four summary cards (devices, installed
+  packages, distinct local admins, open CVEs) + per-report download
+  buttons with a scope selector. Admin-gated.
+
+What's **not** in this slice (coming next):
+- Registry inventory + skip filters — 1.5.1
+- PDF export (johnfercher/maroto) — 1.5.2
+- Scheduling + SMTP + webhook delivery — 1.5.3
+- Level-2 vendor version APIs (cascade) — 1.5.4
+- Unexpected-admin alerting + SLA tracking — 1.5.5
+- Chart panels — 1.5.6
+
 ### 1.4.4 — Correct curated winget→CPE mappings
 
 **Patch**

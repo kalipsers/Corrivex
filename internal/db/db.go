@@ -1829,6 +1829,192 @@ func (d *DB) GetKEVSet() (map[string]bool, error) {
 	return out, rows.Err()
 }
 
+// -- Fleet-wide reports ----------------------------------------------------
+
+// AllInstalledSoftware returns the current installed-software snapshot across
+// every host, alphabetically sorted by hostname then package name. Used by
+// the Reports tab for fleet-wide exports.
+func (d *DB) AllInstalledSoftware() ([]InstalledSoftware, error) {
+	rows, err := d.sql.Query(
+		"SELECT hostname, package_id, package_name, version, source, first_seen, last_seen FROM installed_software ORDER BY hostname, LOWER(package_name), package_id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []InstalledSoftware
+	for rows.Next() {
+		var s InstalledSoftware
+		var pname, ver, src sql.NullString
+		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen); err != nil {
+			return nil, err
+		}
+		s.PackageName = pname.String
+		s.Version = ver.String
+		s.Source = src.String
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// LocalAdminEntry is one (host, admin account) row for reports.
+type LocalAdminEntry struct {
+	Hostname    string `json:"hostname"`
+	Domain      string `json:"domain"`
+	AccountName string `json:"account"`
+	AccountType string `json:"account_type"` // "local" | "domain" | "group" | ""
+	Enabled     bool   `json:"enabled"`
+}
+
+// LocalAdminsAllHosts returns every (host, admin account) pair across the
+// fleet. `pcs.local_admins` is a JSON blob populated by the agent's full
+// scan; we decode it per host and flatten into one entry per account.
+// Formats seen historically: []string of names, or []{name, type, enabled}.
+func (d *DB) LocalAdminsAllHosts() ([]LocalAdminEntry, error) {
+	rows, err := d.sql.Query(
+		"SELECT hostname, COALESCE(domain,''), local_admins FROM pcs WHERE local_admins IS NOT NULL AND local_admins<>'' ORDER BY hostname")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LocalAdminEntry
+	for rows.Next() {
+		var host, dom string
+		var raw sql.NullString
+		if err := rows.Scan(&host, &dom, &raw); err != nil {
+			return nil, err
+		}
+		if !raw.Valid || strings.TrimSpace(raw.String) == "" {
+			continue
+		}
+		out = append(out, decodeLocalAdmins(host, dom, raw.String)...)
+	}
+	return out, rows.Err()
+}
+
+func decodeLocalAdmins(host, domain, raw string) []LocalAdminEntry {
+	// Try the structured form first.
+	var arr []struct {
+		Name    string `json:"name"`
+		Type    string `json:"type"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := json.Unmarshal([]byte(raw), &arr); err == nil && len(arr) > 0 {
+		out := make([]LocalAdminEntry, 0, len(arr))
+		for _, a := range arr {
+			if strings.TrimSpace(a.Name) == "" {
+				continue
+			}
+			out = append(out, LocalAdminEntry{
+				Hostname:    host,
+				Domain:      domain,
+				AccountName: a.Name,
+				AccountType: a.Type,
+				Enabled:     a.Enabled,
+			})
+		}
+		return out
+	}
+	// Fallback: plain string array.
+	var names []string
+	if err := json.Unmarshal([]byte(raw), &names); err == nil {
+		out := make([]LocalAdminEntry, 0, len(names))
+		for _, n := range names {
+			n = strings.TrimSpace(n)
+			if n == "" {
+				continue
+			}
+			out = append(out, LocalAdminEntry{Hostname: host, Domain: domain, AccountName: n})
+		}
+		return out
+	}
+	return nil
+}
+
+// AllCVEFindings mirrors CVEFindingsForHost but across every host. Flat row
+// per (host, package, CVE) — ideal for CSV/JSON export.
+func (d *DB) AllCVEFindings() ([]CVEHostFinding, error) {
+	rows, err := d.sql.Query(`
+		SELECT s.hostname, s.package_id, COALESCE(s.package_name,''), COALESCE(s.version,''),
+		       c.cves_json
+		  FROM installed_software s
+		  JOIN cve_cache c ON c.package_id=s.package_id AND c.version=s.version
+		 ORDER BY s.hostname, s.package_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	kev, err := d.GetKEVSet()
+	if err != nil {
+		return nil, err
+	}
+	var out []CVEHostFinding
+	for rows.Next() {
+		var host, pid, pname, ver string
+		var j sql.NullString
+		if err := rows.Scan(&host, &pid, &pname, &ver, &j); err != nil {
+			return nil, err
+		}
+		if !j.Valid || j.String == "" {
+			continue
+		}
+		var cves []CVEEntry
+		if err := json.Unmarshal([]byte(j.String), &cves); err != nil {
+			continue
+		}
+		for _, c := range cves {
+			out = append(out, CVEHostFinding{
+				Hostname:    host,
+				PackageID:   pid,
+				PackageName: pname,
+				Version:     ver,
+				CVEID:       c.ID,
+				Severity:    c.Severity,
+				CVSS:        c.CVSS,
+				Summary:     c.Summary,
+				FixedIn:     c.FixedVersion,
+				Published:   c.Published,
+				Source:      c.Source,
+				KEV:         kev[c.ID],
+			})
+		}
+	}
+	return out, rows.Err()
+}
+
+// ReportSummary is the set of counters rendered in the Reports tab top cards.
+type ReportSummary struct {
+	Devices            int `json:"devices"`
+	InstalledPackages  int `json:"installed_packages"`
+	DistinctAdmins     int `json:"distinct_local_admins"`
+	OpenCVEs           int `json:"open_cves"`
+}
+
+// ReportsSummary computes the four counters shown on the Reports tab.
+func (d *DB) ReportsSummary() (*ReportSummary, error) {
+	s := &ReportSummary{}
+	if err := d.sql.QueryRow("SELECT COUNT(*) FROM pcs").Scan(&s.Devices); err != nil {
+		return nil, err
+	}
+	if err := d.sql.QueryRow("SELECT COUNT(*) FROM installed_software").Scan(&s.InstalledPackages); err != nil {
+		return nil, err
+	}
+	admins, err := d.LocalAdminsAllHosts()
+	if err != nil {
+		return nil, err
+	}
+	distinct := map[string]bool{}
+	for _, a := range admins {
+		distinct[strings.ToLower(a.AccountName)] = true
+	}
+	s.DistinctAdmins = len(distinct)
+	sum, err := d.CVESummary()
+	if err != nil {
+		return nil, err
+	}
+	s.OpenCVEs = sum.OpenCVEs
+	return s, nil
+}
+
 // -- helpers ----------------------------------------------------------------
 
 func nullStr(s *string) any {
