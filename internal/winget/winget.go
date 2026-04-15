@@ -44,30 +44,68 @@ func Find() string {
 	return ""
 }
 
-// ExitCodeResult maps a winget exit code to a human-readable slug.
+// ExitCodeResult maps a winget exit code to a human-readable slug. Unknown
+// negative codes (winget-specific HRESULTs under the 0x8A15xxxx range) are
+// rendered in hex so admins can look them up at
+// https://learn.microsoft.com/en-us/windows/package-manager/winget/returnCodes.
 func ExitCodeResult(code int) string {
 	switch code {
+	// MSI / Windows installer returns
 	case 0:
 		return "completed"
 	case 3010:
 		return "completed_reboot_required"
 	case 1641:
 		return "completed_reboot_initiated"
-	case -1978335212:
-		return "already_up_to_date"
-	case -1978335189:
-		return "installer_already_running"
-	case -1978335140:
-		return "install_in_progress"
-	case -1978334972:
-		return "reboot_required"
-	case -1978335215:
-		return "no_applicable_installer"
-	case -1978335085:
-		return "package_not_found"
 	case 1618:
 		return "another_install_running"
+
+	// winget-specific HRESULTs (0x8A15xxxx range, sign-extended int32 form)
+	case -1978335231: // 0x8A150001
+		return "internal_error"
+	case -1978335230: // 0x8A150002
+		return "invalid_arguments"
+	case -1978335229: // 0x8A150003
+		return "command_failed"
+	case -1978335224: // 0x8A150008
+		return "download_failed"
+	case -1978335215: // 0x8A150011 — hash mismatch
+		return "installer_hash_mismatch"
+	case -1978335212: // 0x8A150014
+		return "no_applications_found"
+	case -1978335205: // 0x8A15001B
+		return "msstore_blocked_by_policy"
+	case -1978335193: // 0x8A150027
+		return "operation_canceled"
+	case -1978335188: // 0x8A15002C
+		return "package_already_installed"
+	case -1978335186: // 0x8A15002E
+		return "installer_not_applicable"
+	case -1978335183: // 0x8A150031 — sometimes emitted as "installer running"
+		return "installer_already_running"
+	case -1978335181: // 0x8A150033
+		return "update_not_applicable"
+	case -1978335180: // 0x8A150034
+		return "update_all_has_failure"
+	case -1978335179: // 0x8A150035
+		return "install_failed"
+	case -1978335177: // 0x8A150037
+		return "dependency_not_found"
+	case -1978335140: // 0x8A150060
+		return "install_in_progress"
+	case -1978335085: // 0x8A150097
+		return "package_not_found"
+	case -1978334972: // 0x8A150108
+		return "reboot_required"
+	case -1978334959: // 0x8A150111
+		return "package_agreements_not_accepted"
+
 	default:
+		// Unknown: if it's in the winget range, show hex so admins can
+		// cross-reference Microsoft's returnCodes doc directly.
+		if code < 0 {
+			return fmt.Sprintf("exit:0x%08X", uint32(code))
+		}
 		return fmt.Sprintf("exit:%d", code)
 	}
 }
@@ -313,7 +351,12 @@ func runWinget2(wg string, args ...string) (string, int) {
 	code := 0
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			code = exitErr.ExitCode()
+			// Windows returns HRESULT-style exit codes as uint32; Go's
+			// ExitCode() keeps the high bit, so a winget "package not found"
+			// (0x8A150097 → int32 -1978335085) arrives here as 2316632211.
+			// Fold it back to the signed int32 form that matches
+			// Microsoft's documented constants.
+			code = int(int32(exitErr.ExitCode()))
 		} else {
 			return err.Error(), -1
 		}

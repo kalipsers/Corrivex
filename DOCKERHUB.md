@@ -41,6 +41,7 @@ services:
       MARIADB_DATABASE: ${DB_NAME}
       MARIADB_USER: ${DB_USER}
       MARIADB_PASSWORD: ${DB_PASS}
+      TZ: ${TZ:-UTC}
     volumes:
       - corrivex_db:/var/lib/mysql
     healthcheck:
@@ -66,6 +67,7 @@ services:
       REQUIRE_DOMAIN_CHECK: "true"
       HISTORY_KEEP: "50"
       API_SECRET: ${API_SECRET:-}
+      TZ: ${TZ:-UTC}
     ports:
       - "8484:8484"
 
@@ -81,6 +83,10 @@ DB_USER=corrivex
 DB_PASS=change-me-please-32-random-chars
 DB_ROOT_PASS=change-me-please-32-random-chars
 API_SECRET=
+
+# IANA zone — applied to both the MariaDB and Corrivex-server containers
+# so DB timestamps and Go's time.Now() agree. Default UTC.
+TZ=UTC
 ```
 
 Then:
@@ -129,6 +135,7 @@ Server-side configuration (set in `.env` or directly on `environment:`):
 | `API_SECRET` | *(empty)* | Optional shared secret for agent endpoints |
 | `TLS_CERT` | *(empty)* | Path to PEM cert (enables HTTPS) |
 | `TLS_KEY`  | *(empty)* | Path to PEM key |
+| `TZ` | `UTC` | IANA timezone for DB + server. Set on **both** services so `CURRENT_TIMESTAMP` and `time.Now()` stay in sync. |
 
 ---
 

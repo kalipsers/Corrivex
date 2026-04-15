@@ -129,7 +129,10 @@ func runPSStreaming(ctx context.Context, script string, logf func(string, ...any
 	code := 0
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
-			code = ee.ExitCode()
+			// Normalize to signed int32 so HRESULT-style codes
+			// (should a COM call surface one through PS) match the same
+			// format used by winget.ExitCodeResult.
+			code = int(int32(ee.ExitCode()))
 		} else {
 			return allOutput.String(), -1
 		}

@@ -27,6 +27,7 @@ services:
       MARIADB_DATABASE: ${DB_NAME}
       MARIADB_USER: ${DB_USER}
       MARIADB_PASSWORD: ${DB_PASS}
+      TZ: ${TZ:-UTC}
     volumes:
       - corrivex_db:/var/lib/mysql
     healthcheck:
@@ -54,6 +55,7 @@ services:
       REQUIRE_DOMAIN_CHECK: "true"
       HISTORY_KEEP: "50"
       API_SECRET: ${API_SECRET:-}
+      TZ: ${TZ:-UTC}
     ports:
       - "8484:8484"
 

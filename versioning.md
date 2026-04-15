@@ -55,6 +55,37 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.3.1 — Decodeable winget exit codes + timezone
+
+**Patch**
+
+- Task results for winget installs/upgrades used to appear as gibberish
+  like `exit:2316632108`. Root cause: Windows surfaces winget's HRESULT
+  exit codes as uint32 but Go typed them into `int` without sign-
+  extension, so my lookup table (keyed on the Microsoft-documented signed
+  form, `-1978335188`) never matched. `runWinget2` and the winupdate
+  PowerShell runner now fold the uint32 back through `int32` → `int`,
+  so the known-code table hits.
+- Expanded the known-code table with the winget errors that were most
+  commonly seen but unmapped: `package_already_installed`
+  (`0x8A15002C`), `installer_not_applicable` (`0x8A15002E`),
+  `update_not_applicable` (`0x8A150033`), `update_all_has_failure`
+  (`0x8A150034`), `install_failed` (`0x8A150035`), `dependency_not_found`
+  (`0x8A150037`), `download_failed` (`0x8A150008`), `operation_canceled`
+  (`0x8A150027`), `package_agreements_not_accepted` (`0x8A150111`), and
+  a few others.
+- Unknown negative codes now render as `exit:0x8A15XXXX` — same format
+  Microsoft's returnCodes doc uses — so admins can paste the hex
+  straight into Google / the docs and find the semantic name.
+- New `TZ` env var threaded through both compose files and
+  `.env.example`. It sets the container timezone on **both** the MariaDB
+  and Corrivex-server containers (MariaDB's `time_zone=SYSTEM` follows
+  the OS TZ), so `CURRENT_TIMESTAMP` from the DB and Go's `time.Now()`
+  no longer disagree. Use an IANA name such as `Europe/Bratislava` or
+  `America/New_York`. Defaults to `UTC` when unset — which matches the
+  historical behaviour, so existing deployments that don't set `TZ`
+  don't shift.
+
 ### 1.3.0 — Per-host installed-software inventory + version history
 
 **Minor** — significant new capability with a fully migrated schema
