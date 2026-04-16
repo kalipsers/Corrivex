@@ -55,6 +55,42 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.7.4 — Proactive choco bootstrap + winget source-update fix
+
+**Patch**
+
+Two issues surfaced in a live agent log:
+
+1. `winget source update returned invalid_arguments (non-fatal)`
+   The 1.6.3 call passed `--accept-source-agreements
+   --disable-interactivity` to the source subcommand. Neither flag
+   is accepted by `winget source update` (they belong on
+   install/upgrade). The source refresh still happened silently on
+   exit 0 but older winget builds returned exit -1978335230
+   ("invalid arguments") without doing anything. Stripped the flags;
+   the call is now just `winget source update`.
+
+2. **No choco scan on hosts without chocolatey.** 1.7.0 promised
+   that the agent would bootstrap chocolatey on hosts that don't
+   have it (mirroring EnsureWinget), but I only wired EnsureChoco
+   inside the choco_* task handlers — the full-scan merge path
+   silently bailed when `choco.IsInstalled()` returned false, which
+   is every clean Windows host. Users saw no choco log lines and
+   thought the scan was broken.
+   Fix: `mergeChocolatey` now runs EnsureChoco proactively on the
+   first scan per agent install, gated by the new server setting
+   `choco_autoinstall` (default `true`). Air-gapped fleets can set
+   it to `false` to keep the agent from reaching
+   `community.chocolatey.org/install.ps1`.
+   The merge function also logs one line in every branch now —
+   "not installed, autoinstall disabled", "running EnsureChoco
+   bootstrap", "bootstrap failed: …", or "choco merge: +X new, Y
+   confirmed" — so the log stream clearly shows the path taken.
+
+`choco_autoinstall` is exposed through the existing `agent_config`
+endpoint; admins who want to flip it can use `set_settings` until a
+dedicated UI toggle lands in 1.7.5.
+
 ### 1.7.3 — Upgrade tab is source-aware (winget + chocolatey)
 
 **Patch**

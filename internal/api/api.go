@@ -618,6 +618,10 @@ func (s *Server) agentConfig(w http.ResponseWriter, r *http.Request) {
 		"reg_scan_min_name_length",
 		"reg_scan_custom_skip_patterns",
 		"reg_scan_custom_skip_publishers",
+		// 1.7.4+: lets admins opt out of agent-side choco bootstrap.
+		// Default "true" applies when the setting row is absent (empty
+		// value) — matches the 1.7.0 changelog promise.
+		"choco_autoinstall",
 	}
 	out := make(map[string]string, len(keys))
 	for _, k := range keys {

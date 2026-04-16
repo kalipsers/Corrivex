@@ -131,7 +131,24 @@ func (r *Runtime) mergeRegistry(winList []winget.Package, logf func(format strin
 // namespace never collides with winget ids.
 func (r *Runtime) mergeChocolatey(winList []winget.Package, logf func(format string, a ...any)) []winget.Package {
 	if !choco.IsInstalled() {
-		return winList
+		// Respect the server-side toggle. Default is autoinstall=true so
+		// every agent eventually picks up choco without admin action; set
+		// the setting to "false" on air-gapped fleets where reaching
+		// community.chocolatey.org/install.ps1 is impossible.
+		if !r.chocoAutoinstallAllowed() {
+			logf("choco: not installed, autoinstall disabled — skipping choco merge")
+			return winList
+		}
+		logf("choco: not installed — running EnsureChoco bootstrap")
+		if err := choco.EnsureChoco(logf); err != nil {
+			logf("choco: bootstrap failed: %v — continuing without choco this scan", err)
+			return winList
+		}
+		if !choco.IsInstalled() {
+			// Script claimed success but Find() still comes up empty.
+			logf("choco: bootstrap finished but choco.exe still not found on PATH — skipping")
+			return winList
+		}
 	}
 
 	// Fetch installed + outdated simultaneously so we know pending-upgrade
@@ -184,6 +201,28 @@ func (r *Runtime) mergeChocolatey(winList []winget.Package, logf func(format str
 		logf("choco merge: +%d new, %d confirmed (winget+choco)", added, promoted)
 	}
 	return winList
+}
+
+// chocoAutoinstallAllowed is a cached wrapper around the
+// choco_autoinstall server setting. Default true — matches the
+// 1.7.0 changelog's promise that chocolatey bootstraps on every agent
+// that doesn't already have it. Admins running air-gapped fleets can
+// set the setting to "false" to keep the agent from reaching
+// community.chocolatey.org.
+func (r *Runtime) chocoAutoinstallAllowed() bool {
+	cfg := r.fetchAgentConfig()
+	if cfg == nil {
+		return true
+	}
+	v, ok := cfg["choco_autoinstall"]
+	if !ok {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "0", "false", "no", "off":
+		return false
+	}
+	return true
 }
 
 // stripChocoPrefix returns the raw Chocolatey id without the `choco:`

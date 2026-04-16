@@ -159,16 +159,20 @@ var commonFlags = []string{
 	"--disable-interactivity",
 }
 
-// SourceUpdate refreshes the local index and re-asserts blanket acceptance
-// of every configured source's agreement. Fire this before an install/upgrade
-// to dodge stale-source-agreement traps that otherwise trigger
-// APPINSTALLER_CLI_ERROR_PACKAGE_AGREEMENTS_NOT_ACCEPTED (0x8A150111).
+// SourceUpdate refreshes the local index for every configured winget
+// source. `winget source update` does NOT accept the install/upgrade
+// agreement flags — they return "invalid arguments" — so this call is
+// deliberately minimal. A source refresh still helps dodge stale
+// upgrade-availability data that winget would otherwise serve for
+// several seconds after an upgrade completed.
 func SourceUpdate() (string, int) {
 	wg := Find()
 	if wg == "" {
 		return "winget not found", -1
 	}
-	return runWinget2(wg, "source", "update", "--accept-source-agreements", "--disable-interactivity")
+	// `source update` takes only an optional --name; no flags that
+	// newer/older winget builds may not recognise.
+	return runWinget2(wg, "source", "update")
 }
 
 // RunUpgradeAll runs `winget upgrade --all` with the blanket-accept flags.
