@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/markov/corrivex/internal/choco"
 	"github.com/markov/corrivex/internal/regscan"
 	"github.com/markov/corrivex/internal/winget"
 )
@@ -59,21 +58,15 @@ func (r *Runtime) fetchAgentConfig() map[string]string {
 // `logf` is the agent's WebSocket-backed log stream — used for one-line
 // visibility into how many rows came from each source.
 func (r *Runtime) mergeRegistry(winList []winget.Package, logf func(format string, a ...any)) []winget.Package {
-	// Set the default source on every winget row so subsequent merges can
-	// promote or extend the source tag cleanly.
+	// Set the default source on every winget row so the subsequent merge
+	// can promote it to "winget+registry" cleanly.
 	for i := range winList {
 		if winList[i].Source == "" {
 			winList[i].Source = "winget"
 		}
 	}
 
-	// ---- Chocolatey merge ---------------------------------------------
-	// Agents running Chocolatey get a full second inventory. Names that
-	// collide with a winget row flip that row's source to "winget+choco";
-	// unmatched choco rows join the list with a "choco:" prefixed id.
-	winList = r.mergeChocolatey(winList, logf)
-
-	// ---- Registry merge (as before) -----------------------------------
+	// ---- Registry merge ------------------------------------------------
 	var filters *regscan.Filters
 	if cfg := r.fetchAgentConfig(); cfg != nil {
 		f := regscan.FiltersFromSettings(cfg)
@@ -121,116 +114,6 @@ func (r *Runtime) mergeRegistry(winList []winget.Package, logf func(format strin
 		logf("registry merge: +%d new, %d confirmed (registry)", added, promoted)
 	}
 	return winList
-}
-
-// mergeChocolatey appends Chocolatey-tracked packages into the merged
-// list. Called once per full scan from mergeRegistry. Choco entries that
-// match an existing winget row (by normalised name) flip the row's
-// source tag from "winget" → "winget+choco"; unmatched entries arrive
-// as new rows with source="chocolatey" and id="choco:<choco-id>" so the
-// namespace never collides with winget ids.
-func (r *Runtime) mergeChocolatey(winList []winget.Package, logf func(format string, a ...any)) []winget.Package {
-	if !choco.IsInstalled() {
-		// Respect the server-side toggle. Default is autoinstall=true so
-		// every agent eventually picks up choco without admin action; set
-		// the setting to "false" on air-gapped fleets where reaching
-		// community.chocolatey.org/install.ps1 is impossible.
-		if !r.chocoAutoinstallAllowed() {
-			logf("choco: not installed, autoinstall disabled — skipping choco merge")
-			return winList
-		}
-		logf("choco: not installed — running EnsureChoco bootstrap")
-		if err := choco.EnsureChoco(logf); err != nil {
-			logf("choco: bootstrap failed: %v — continuing without choco this scan", err)
-			return winList
-		}
-		if !choco.IsInstalled() {
-			// Script claimed success but Find() still comes up empty.
-			logf("choco: bootstrap finished but choco.exe still not found on PATH — skipping")
-			return winList
-		}
-	}
-
-	// Fetch installed + outdated simultaneously so we know pending-upgrade
-	// state for choco entries that end up in the list.
-	installed, err := choco.ListInstalled()
-	if err != nil {
-		logf("choco list failed: %v", err)
-		return winList
-	}
-	outdated, err := choco.ListUpgrades()
-	if err != nil {
-		// Non-fatal; still merge the installed inventory.
-		logf("choco outdated failed: %v", err)
-	}
-	// Fast lookup: choco id → "available" version.
-	available := make(map[string]string, len(outdated))
-	for _, o := range outdated {
-		available[strings.ToLower(o.ID)] = o.Available
-	}
-
-	byName := make(map[string]int, len(winList))
-	for i, p := range winList {
-		byName[normalise(p.Name)] = i
-	}
-
-	added := 0
-	promoted := 0
-	for _, c := range installed {
-		key := normalise(c.Name)
-		if idx, ok := byName[key]; ok {
-			if !strings.Contains(winList[idx].Source, "choco") {
-				winList[idx].Source = mergeSourceTags(winList[idx].Source, "choco")
-				promoted++
-			}
-			continue
-		}
-		pkg := winget.Package{
-			ID:      "choco:" + c.ID,
-			Name:    c.Name,
-			Version: c.Version,
-			Source:  "chocolatey",
-		}
-		if v, ok := available[strings.ToLower(c.ID)]; ok {
-			pkg.Available = v
-		}
-		winList = append(winList, pkg)
-		added++
-	}
-	if added > 0 || promoted > 0 {
-		logf("choco merge: +%d new, %d confirmed (winget+choco)", added, promoted)
-	}
-	return winList
-}
-
-// chocoAutoinstallAllowed is a cached wrapper around the
-// choco_autoinstall server setting. Default true — matches the
-// 1.7.0 changelog's promise that chocolatey bootstraps on every agent
-// that doesn't already have it. Admins running air-gapped fleets can
-// set the setting to "false" to keep the agent from reaching
-// community.chocolatey.org.
-func (r *Runtime) chocoAutoinstallAllowed() bool {
-	cfg := r.fetchAgentConfig()
-	if cfg == nil {
-		return true
-	}
-	v, ok := cfg["choco_autoinstall"]
-	if !ok {
-		return true
-	}
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "0", "false", "no", "off":
-		return false
-	}
-	return true
-}
-
-// stripChocoPrefix returns the raw Chocolatey id without the `choco:`
-// namespace prefix the merger adds. The agent stores ids as
-// `choco:<id>` in the DB to avoid collisions with winget ids, but the
-// choco CLI itself wants just `<id>`.
-func stripChocoPrefix(id string) string {
-	return strings.TrimPrefix(id, "choco:")
 }
 
 // mergeSourceTags joins two source tags deterministically. "winget" +

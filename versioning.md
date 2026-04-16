@@ -55,6 +55,37 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.8.0 — Remove chocolatey integration
+
+**Minor** — feature removal. Chocolatey support (1.7.0 / 1.7.3 / 1.7.4,
+all local-dev only, never publicly released) was ripped out because in
+practice the bootstrap and silent-install flows weren't reliable enough
+on the test fleet. Local-file installers (1.7.1) and SMB credentials
+(1.7.2) remain — those are the viable long-tail-install paths.
+
+- `internal/choco` package deleted entirely.
+- Agent `RunTasks` switch drops the four `choco_*` cases. The agent
+  no longer calls `choco.exe` for any task, and the full-scan merge
+  no longer reads `choco list` / `choco outdated`.
+- `internal/agent/regmerge.go` simplified — removed
+  `mergeChocolatey`, `chocoAutoinstallAllowed`, `stripChocoPrefix`.
+  `mergeSourceTags` stays because the registry merge still needs it.
+- Dashboard Upgrades tab reverts to "Winget" — no more source chips,
+  no more "Upgrade all (choco)" split button. Bulk-upgrade uses
+  `upgrade_package` for every selection unconditionally.
+- `createTask` validator drops the four `choco_*` task types;
+  `agent_config` stops returning `choco_autoinstall`.
+- DB enum values `choco_install`, `choco_upgrade`,
+  `choco_upgrade_all`, `choco_uninstall` are left in the
+  `tasks.type` MariaDB ENUM and SQLite CHECK constraint. They're
+  harmless orphans — no code path can create them anymore — and
+  removing them would force a schema-rebuild for no user-visible
+  benefit. The settings row `choco_autoinstall` is also left alone
+  (the UI never exposed a toggle and no code reads it).
+
+Go back to 1.7.2 if you want the last state *with* chocolatey —
+1.8.0 is the clean "chocolatey never happened" snapshot.
+
 ### 1.7.4 — Proactive choco bootstrap + winget source-update fix
 
 **Patch**

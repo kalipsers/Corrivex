@@ -618,10 +618,6 @@ func (s *Server) agentConfig(w http.ResponseWriter, r *http.Request) {
 		"reg_scan_min_name_length",
 		"reg_scan_custom_skip_patterns",
 		"reg_scan_custom_skip_publishers",
-		// 1.7.4+: lets admins opt out of agent-side choco bootstrap.
-		// Default "true" applies when the setting row is absent (empty
-		// value) — matches the 1.7.0 changelog promise.
-		"choco_autoinstall",
 	}
 	out := make(map[string]string, len(keys))
 	for _, k := range keys {
@@ -1068,8 +1064,6 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		"uninstall_package": true, "check": true,
 		"windows_update_all": true, "windows_update_single": true,
 		"full_scan": true,
-		"choco_install": true, "choco_upgrade": true,
-		"choco_upgrade_all": true, "choco_uninstall": true,
 		"local_install": true,
 	}
 	if hostname == "" || !valid[body.Type] {

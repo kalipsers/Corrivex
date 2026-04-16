@@ -1634,7 +1634,7 @@ function renderDeviceModal(pc) {
   let html = '';
   html += '<nav class="modal-tabs" role="tablist">';
   html += '<button class="modal-tab' + (prevTab==='overview'?' is-active':'') + '" data-modal-tab="overview">Overview</button>';
-  html += '<button class="modal-tab' + (prevTab==='winget'?' is-active':'') + '" data-modal-tab="winget">Upgrades <span class="chip muted">' + pkgs.length + '</span></button>';
+  html += '<button class="modal-tab' + (prevTab==='winget'?' is-active':'') + '" data-modal-tab="winget">Winget <span class="chip muted">' + pkgs.length + '</span></button>';
   html += '<button class="modal-tab' + (prevTab==='wu'?' is-active':'') + '" data-modal-tab="wu">Windows update <span class="chip muted">' + wu.length + '</span></button>';
   html += '<button class="modal-tab' + (prevTab==='installed'?' is-active':'') + '" data-modal-tab="installed">Installed software</button>';
   html += '</nav>';
@@ -1660,16 +1660,13 @@ function renderDeviceModal(pc) {
   // in-flight tasks (pending/delivered) so that completed tasks from an old
   // winget upgrade don't disable a package row in a newer scan.
   const pkgLiveStatus = {};
-  let allUpgradeState = null;      // 'pending' | 'delivered' — winget upgrade-all
-  let chocoUpgradeAllState = null; // same for choco_upgrade_all
+  let allUpgradeState = null; // 'pending' | 'delivered' — or null
   let wuAllState = null;
   const wuLiveStatus = {};
   for (const t of (pc.tasks || [])) {
     if (t.status !== 'pending' && t.status !== 'delivered') continue;
     if (t.type === 'upgrade_all') {
       allUpgradeState = t.status;
-    } else if (t.type === 'choco_upgrade_all') {
-      chocoUpgradeAllState = t.status;
     } else if (t.type === 'windows_update_all') {
       wuAllState = t.status;
     } else if (t.type === 'windows_update_single' && t.package_id) {
@@ -1679,27 +1676,16 @@ function renderDeviceModal(pc) {
     }
   }
 
-  // Split the pending-upgrade list by package source so we can render
-  // per-source "Upgrade all" buttons. Winget and chocolatey each get
-  // their own since they're different CLI tools under the hood.
-  const wingetPkgs = pkgs.filter(p => !String(p.id || '').startsWith('choco:'));
-  const chocoPkgs  = pkgs.filter(p =>  String(p.id || '').startsWith('choco:'));
-
   html += '<section class="section" data-pkg-section>';
   html += '<div class="section-hd"><div class="section-title">Pending updates (' + pkgs.length + ')</div>';
-  html += '<div style="display:inline-flex;gap:8px;margin-left:auto;flex-wrap:wrap">';
+  html += '<div style="display:inline-flex;gap:8px;margin-left:auto">';
   // Always render the refresh button — useful even when pkgs.length == 0
   // to force-reconcile after an out-of-band upgrade.
   html += '<button class="btn btn-sm btn-ghost" id="refresh-inventory-btn" data-action="full-scan" data-host="' + escapeHTML(pc.hostname) + '" title="Force the agent to re-run winget list + registry scan now. Useful when a package was upgraded outside Corrivex.">Refresh inventory</button>';
-  if (wingetPkgs.length > 0) {
+  if (pkgs.length > 0) {
     const allDisabled = !!allUpgradeState;
-    const allLabel = allUpgradeState === 'pending' ? 'Upgrading winget…' : allUpgradeState === 'delivered' ? 'Running…' : 'Upgrade all (winget)';
+    const allLabel = allUpgradeState === 'pending' ? 'Upgrading all…' : allUpgradeState === 'delivered' ? 'Running…' : 'Upgrade all';
     html += '<button class="btn btn-sm btn-primary" id="upgrade-all-btn" data-action="upgrade-all" data-host="' + escapeHTML(pc.hostname) + '"' + (allDisabled ? ' disabled' : '') + '>' + escapeHTML(allLabel) + '</button>';
-  }
-  if (chocoPkgs.length > 0) {
-    const allDisabled = !!chocoUpgradeAllState;
-    const allLabel = chocoUpgradeAllState === 'pending' ? 'Upgrading choco…' : chocoUpgradeAllState === 'delivered' ? 'Running…' : 'Upgrade all (choco)';
-    html += '<button class="btn btn-sm btn-primary" id="choco-upgrade-all-btn" data-action="choco-upgrade-all" data-host="' + escapeHTML(pc.hostname) + '"' + (allDisabled ? ' disabled' : '') + '>' + escapeHTML(allLabel) + '</button>';
   }
   html += '</div>';
   html += '</div>';
@@ -1720,28 +1706,18 @@ function renderDeviceModal(pc) {
     for (const p of pkgs) {
       const pid = p.id || '';
       const pname = p.name || '';
-      const isChoco = pid.startsWith('choco:');
-      // "Upgrade all" state propagates only within its source family.
-      const familyAllState = isChoco ? chocoUpgradeAllState : allUpgradeState;
-      const effectiveStatus = familyAllState || pkgLiveStatus[pid]?.status || '';
+      const effectiveStatus = allUpgradeState || pkgLiveStatus[pid]?.status || '';
       const rowCls = effectiveStatus === 'delivered' || effectiveStatus === 'pending' ? ' is-running' : '';
       const disabled = effectiveStatus === 'pending' || effectiveStatus === 'delivered';
-      const srcChip = isChoco
-        ? '<span class="chip" style="background:#ccfbf1;color:#0f766e;border:1px solid #99f6e4;font-size:10px;padding:1px 6px;margin-left:6px" title="Chocolatey">choco</span>'
-        : '<span class="chip" style="background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;font-size:10px;padding:1px 6px;margin-left:6px" title="winget">winget</span>';
-      // Strip the choco: prefix only for display in the id sub-label — data-id
-      // keeps the full namespaced form so the task handler routes correctly.
-      const displayID = isChoco ? pid.slice(6) : pid;
-      const actionType = isChoco ? 'choco-upgrade-one' : 'upgrade-one';
       html += '<label class="pkg' + rowCls + '" data-pkg-row="' + escapeHTML(pid) + '">';
-      html += '<input type="checkbox" class="pkg-check" data-id="' + escapeHTML(pid) + '" data-name="' + escapeHTML(pname) + '" data-source="' + (isChoco ? 'choco' : 'winget') + '"' + (disabled ? ' disabled' : '') + '>';
-      html += '<div><strong>' + escapeHTML(pname || displayID || '?') + '</strong>' + srcChip + '<div class="pkg-id">' + escapeHTML(displayID) + '</div></div>';
+      html += '<input type="checkbox" class="pkg-check" data-id="' + escapeHTML(pid) + '" data-name="' + escapeHTML(pname) + '"' + (disabled ? ' disabled' : '') + '>';
+      html += '<div><strong>' + escapeHTML(pname || pid || '?') + '</strong><div class="pkg-id">' + escapeHTML(pid) + '</div></div>';
       html += '<span class="pkg-v">' + escapeHTML(p.version || '?') + '</span>';
       html += '<span class="pkg-arrow">→</span>';
       html += '<span class="pkg-v"><strong>' + escapeHTML(p.available || '?') + '</strong></span>';
       html += '<span class="pkg-status" data-pkg-status="' + escapeHTML(pid) + '">' + pkgStatusChip(effectiveStatus) + '</span>';
       html += '<span class="pkg-cve" data-pkg-cve="' + escapeHTML(pid) + '"></span>';
-      html += '<button class="btn btn-sm btn-cta-outline" data-action="' + actionType + '" data-host="' + escapeHTML(pc.hostname) + '" data-id="' + escapeHTML(pid) + '" data-name="' + escapeHTML(pname) + '"' + (disabled ? ' disabled' : '') + '>' + (disabled ? '…' : 'Upgrade') + '</button>';
+      html += '<button class="btn btn-sm btn-cta-outline" data-action="upgrade-one" data-host="' + escapeHTML(pc.hostname) + '" data-id="' + escapeHTML(pid) + '" data-name="' + escapeHTML(pname) + '"' + (disabled ? ' disabled' : '') + '>' + (disabled ? '…' : 'Upgrade') + '</button>';
       html += '</label>';
     }
     html += '</div>';
@@ -2307,11 +2283,8 @@ function bindBulkSelect() {
     let ok = 0, fail = 0;
     for (const b of sel) {
       setPkgRowStatus(b.dataset.id, 'pending');
-      // Route per-row to the right task type: data-source was stamped
-      // at render time based on the id's `choco:` prefix.
-      const type = b.dataset.source === 'choco' ? 'choco_upgrade' : 'upgrade_package';
       try {
-        await createTaskQuiet({ hostname: host, type, package_id: b.dataset.id, package_name: b.dataset.name });
+        await createTaskQuiet({ hostname: host, type: 'upgrade_package', package_id: b.dataset.id, package_name: b.dataset.name });
         ok++;
       } catch {
         fail++;
@@ -3054,25 +3027,10 @@ document.addEventListener('click', async (e) => {
     popLogPane();
     return createTask({ hostname: btn.dataset.host, type: 'upgrade_all' }, 'Upgrade queued');
   }
-  if (a === 'choco-upgrade-all') {
-    // Disable the button visually until the task returns; the WS "task"
-    // event will flip it back to normal on completion.
-    btn.disabled = true;
-    const orig = btn.textContent;
-    btn.textContent = 'Queued…';
-    setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 4000);
-    popLogPane();
-    return createTask({ hostname: btn.dataset.host, type: 'choco_upgrade_all' }, 'Chocolatey upgrade-all queued');
-  }
   if (a === 'upgrade-one') {
     setPkgRowStatus(btn.dataset.id, 'pending');
     popLogPane();
     return createTask({ hostname: btn.dataset.host, type: 'upgrade_package', package_id: btn.dataset.id, package_name: btn.dataset.name }, 'Package upgrade queued');
-  }
-  if (a === 'choco-upgrade-one') {
-    setPkgRowStatus(btn.dataset.id, 'pending');
-    popLogPane();
-    return createTask({ hostname: btn.dataset.host, type: 'choco_upgrade', package_id: btn.dataset.id, package_name: btn.dataset.name }, 'Chocolatey package upgrade queued');
   }
   if (a === 'wu-install-all') {
     setWUAllState('pending');
