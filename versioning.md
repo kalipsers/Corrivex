@@ -55,6 +55,33 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.7.3 — Upgrade tab is source-aware (winget + chocolatey)
+
+**Patch**
+
+The 1.7.0 chocolatey plumbing wired choco packages into the agent
+report and created the `choco_*` task types, but the dashboard's
+Upgrade tab (historically the "Winget" tab) rendered every pending
+upgrade as a winget row. Clicking **Upgrade** on a chocolatey row
+sent `upgrade_package` which winget promptly rejected (it doesn't
+know about `choco:<id>` identifiers).
+
+- Device-modal "Winget" tab is now labelled **Upgrades** and shows a
+  small source chip next to each package name: `winget` (blue),
+  `chocolatey` (teal). Rows from both sources appear in a single
+  list so admins see the full "what's out of date" picture.
+- Per-row Upgrade button dispatches the correct task type:
+  - `id` prefix `choco:` → `choco_upgrade`
+  - otherwise → `upgrade_package` (winget, unchanged)
+- **Upgrade all** now splits into two buttons when both sources have
+  pending work:
+  - **Upgrade all (winget)** → `upgrade_all` task
+  - **Upgrade all (choco)** → `choco_upgrade_all` task
+  When only one source has rows, only that button shows.
+- Refresh inventory (full_scan) button unchanged — refreshes both
+  inventories since the agent's post-task rescan always runs
+  winget + choco + registry.
+
 ### 1.7.2 — SMB credentials for network-share installer sources
 
 **Minor** — lets agents authenticate against SMB/CIFS file shares
