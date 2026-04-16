@@ -1132,6 +1132,29 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
       </div>
     </div>
 
+    <!-- SMB credentials for installer shares (1.7.2+) -->
+    <div class="card" style="max-width:960px;margin-top:16px" data-admin-only>
+      <div class="card-hd">
+        <div>
+          <h2 class="h2">Network shares</h2>
+          <div class="sub" style="color:var(--c-muted);font-size:12px;margin-top:4px">
+            Stored SMB credentials for UNC shares the agent needs to reach for local-installer rollouts. Passwords are encrypted at rest (AES-GCM) and never returned through any API.
+          </div>
+        </div>
+      </div>
+      <div class="card-bd">
+        <div class="tbl-wrap">
+          <table class="tbl" id="smb-table">
+            <thead><tr><th>Share root</th><th>Username</th><th>Domain</th><th>Notes</th><th style="text-align:right">Actions</th></tr></thead>
+            <tbody><tr><td colspan="5" class="sub">Loading…</td></tr></tbody>
+          </table>
+        </div>
+        <div style="margin-top:14px;display:flex;justify-content:flex-end">
+          <button class="btn btn-primary" id="new-smb-btn">Add credential</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Registry scan filters (1.6.0+) -->
     <div class="card" style="max-width:720px;margin-top:16px" data-admin-only>
       <div class="card-hd">
@@ -1324,6 +1347,36 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
       </section>
     </div>
     <div class="modal-ft"><button class="btn" data-close>Close</button></div>
+  </div>
+</div>
+
+<!-- Add/edit SMB credential modal (admin, 1.7.2+) -->
+<div class="modal-backdrop" id="smb-modal" role="dialog" aria-modal="true" data-admin-only>
+  <div class="modal" style="max-width:560px">
+    <div class="modal-hd">
+      <div class="modal-title" id="smb-modal-title">Add network share credential</div>
+      <button class="icon-btn" data-close><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg></button>
+    </div>
+    <div class="modal-bd">
+      <input type="hidden" id="smb-edit-id">
+      <div class="field">
+        <label>Share root (UNC)</label>
+        <input type="text" id="smb-root" placeholder="\\fileserver\installers">
+        <div class="hint">Longest-prefix match: a credential for <code>\\fileserver\installers</code> covers every path that starts with it.</div>
+      </div>
+      <div class="field"><label>Username</label><input type="text" id="smb-user" placeholder="corrivex-agent"></div>
+      <div class="field"><label>Domain (optional)</label><input type="text" id="smb-domain" placeholder="CONTOSO"></div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="smb-pass" placeholder="" autocomplete="new-password">
+        <div class="hint" id="smb-pass-hint">Required when adding; leave blank when editing to keep the stored password unchanged.</div>
+      </div>
+      <div class="field"><label>Notes (optional)</label><textarea id="smb-notes" rows="2"></textarea></div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="smb-save-btn">Save</button>
+    </div>
   </div>
 </div>
 
@@ -3275,6 +3328,118 @@ document.getElementById('save-li-prefixes-btn')?.addEventListener('click', async
     const json = await res.json();
     if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
     toast('Allowed prefixes saved', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+});
+
+// ---- SMB credentials (1.7.2+) --------------------------------------------
+async function loadSMBCredentials() {
+  const tbody = document.querySelector('#smb-table tbody');
+  if (!tbody) return;
+  try {
+    const res = await fetch(API + '?action=list_smb_credentials', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const rows = await res.json();
+    if (!Array.isArray(rows) || rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="sub">No stored credentials yet.</td></tr>';
+      return;
+    }
+    let html = '';
+    for (const r of rows) {
+      html += '<tr>';
+      html += '<td class="mono" style="font-size:11px">' + escapeHTML(r.share_root) + '</td>';
+      html += '<td>' + escapeHTML(r.username) + '</td>';
+      html += '<td class="sub">' + escapeHTML(r.domain || '—') + '</td>';
+      html += '<td class="sub">' + escapeHTML(r.notes || '') + '</td>';
+      html += '<td style="text-align:right;white-space:nowrap">';
+      html += '<button class="btn btn-sm btn-ghost" data-action="smb-edit" data-row=\'' + escapeHTML(JSON.stringify(r)) + '\'>Edit</button> ';
+      html += '<button class="btn btn-sm btn-ghost" data-action="smb-delete" data-id="' + r.id + '" data-root="' + escapeHTML(r.share_root) + '">Delete</button>';
+      html += '</td></tr>';
+    }
+    tbody.innerHTML = html;
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="5" class="sub">Load failed: ' + escapeHTML(String(e)) + '</td></tr>';
+  }
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('.tab');
+  if (t && t.dataset.tab === 'settings') loadSMBCredentials();
+});
+loadSMBCredentials();
+
+function openSMBModal(row) {
+  const m = document.getElementById('smb-modal');
+  if (!m) return;
+  document.getElementById('smb-modal-title').textContent = row ? 'Edit network share credential' : 'Add network share credential';
+  document.getElementById('smb-edit-id').value = row ? row.id : '';
+  document.getElementById('smb-root').value    = row ? (row.share_root || '') : '';
+  document.getElementById('smb-user').value    = row ? (row.username   || '') : '';
+  document.getElementById('smb-domain').value  = row ? (row.domain     || '') : '';
+  document.getElementById('smb-pass').value    = '';
+  document.getElementById('smb-notes').value   = row ? (row.notes      || '') : '';
+  document.getElementById('smb-pass-hint').textContent = row
+    ? 'Leave blank to keep the stored password unchanged.'
+    : 'Required.';
+  m.classList.add('is-open');
+  document.body.style.overflow = 'hidden';
+}
+document.getElementById('smb-modal')?.addEventListener('click', e => {
+  if (e.target.id === 'smb-modal' || e.target.closest('[data-close]')) {
+    document.getElementById('smb-modal').classList.remove('is-open');
+    if (!document.querySelector('.modal-backdrop.is-open')) document.body.style.overflow = '';
+  }
+});
+document.getElementById('new-smb-btn')?.addEventListener('click', () => openSMBModal(null));
+
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const a = btn.dataset.action;
+  if (a === 'smb-edit') {
+    try { openSMBModal(JSON.parse(btn.dataset.row)); } catch (_) {}
+  }
+  if (a === 'smb-delete') {
+    if (!confirm('Remove stored SMB credential for ' + btn.dataset.root + '? Agents will lose auth to that share.')) return;
+    try {
+      const res = await fetch(API + '?action=delete_smb_credential', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: Number(btn.dataset.id) }), credentials: 'same-origin',
+      });
+      const json = await res.json();
+      if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
+      toast('Credential removed', 'ok');
+      loadSMBCredentials();
+    } catch (e) { toast(e.message, 'err'); }
+  }
+});
+
+document.getElementById('smb-save-btn')?.addEventListener('click', async () => {
+  const id = document.getElementById('smb-edit-id').value;
+  const pw = document.getElementById('smb-pass').value;
+  const payload = {
+    share_root: document.getElementById('smb-root').value.trim(),
+    username:   document.getElementById('smb-user').value.trim(),
+    domain:     document.getElementById('smb-domain').value.trim(),
+    notes:      document.getElementById('smb-notes').value.trim(),
+    // __keep__ sentinel → server leaves the stored ciphertext alone
+    password: pw === '' && id ? '__keep__' : pw,
+  };
+  if (!payload.share_root.startsWith('\\\\')) {
+    toast('Share root must be a UNC path starting with \\\\', 'err');
+    return;
+  }
+  if (!payload.username) { toast('Username is required', 'err'); return; }
+  if (!id && !pw) { toast('Password is required for a new credential', 'err'); return; }
+  try {
+    const res = await fetch(API + '?action=save_smb_credential', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload), credentials: 'same-origin',
+    });
+    const json = await res.json();
+    if (!res.ok || json.error) throw new Error(json.error || 'HTTP ' + res.status);
+    toast('Credential saved', 'ok');
+    document.getElementById('smb-modal').classList.remove('is-open');
+    if (!document.querySelector('.modal-backdrop.is-open')) document.body.style.overflow = '';
+    loadSMBCredentials();
   } catch (e) { toast(e.message, 'err'); }
 });
 

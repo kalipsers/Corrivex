@@ -359,6 +359,20 @@ var migrations = []struct {
 		`INSERT IGNORE INTO settings (key_name, value) VALUES
 			('local_installer_allowed_prefixes', '')`,
 	}},
+	{16, "SMB credentials (AES-GCM encrypted)", []string{
+		`CREATE TABLE IF NOT EXISTS smb_credentials (
+			id INT NOT NULL AUTO_INCREMENT,
+			share_root VARCHAR(500) NOT NULL,
+			username VARCHAR(255) NOT NULL,
+			domain VARCHAR(255) NULL,
+			password_enc VARCHAR(500) NOT NULL,
+			notes VARCHAR(1000) NULL,
+			created_by VARCHAR(100) NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_smb_root (share_root)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	}},
 }
 
 func (d *DB) Migrate() error {
@@ -679,6 +693,18 @@ var migrationsSQLite = []struct {
 		`CREATE INDEX IF NOT EXISTS idx_tasks_host_status ON tasks(hostname, status)`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES
 			('local_installer_allowed_prefixes', '')`,
+	}},
+	{16, "SMB credentials (AES-GCM encrypted)", []string{
+		`CREATE TABLE IF NOT EXISTS smb_credentials (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			share_root TEXT NOT NULL UNIQUE,
+			username TEXT NOT NULL,
+			domain TEXT,
+			password_enc TEXT NOT NULL,
+			notes TEXT,
+			created_by TEXT,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}},
 }
 

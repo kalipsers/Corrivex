@@ -55,6 +55,57 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.7.2 — SMB credentials for network-share installer sources
+
+**Minor** — lets agents authenticate against SMB/CIFS file shares
+before reading local_install installers from them. Complements 1.7.1:
+now admins can point `local_installers.path` at a share even when the
+agent's SYSTEM account has no inherent rights on it.
+
+- Schema migration 16: new `smb_credentials` table.
+  - `share_root` — the top-level UNC prefix this credential applies
+    to, e.g. `\\fileserver\installers`. A longest-prefix match at
+    runtime picks the right credential for a given installer path.
+  - `username`, `domain` — plain text.
+  - `password_enc` — AES-GCM ciphertext (nonce prepended). Base64 in
+    the column to stay bytes-safe across MariaDB/SQLite.
+  - `notes`, `created_by`, `created_at`.
+  - Server-side encryption key: `CORRIVEX_SMB_KEY` env var; when
+    unset the server generates a 32-byte key on first boot and
+    persists it in a new `smb_key` settings row so restarts don't
+    lose decryption capability. The key is never exposed through any
+    API — password fields are write-only.
+- Admin-gated CRUD:
+  - `list_smb_credentials` — returns every row minus the password.
+  - `save_smb_credential` — upserts by share_root; accepts password
+    plaintext, stores ciphertext, returns row id.
+  - `delete_smb_credential` — by id.
+- Agent-facing TOFU-auth endpoint `agent_smb_creds` — takes the
+  installer path and returns the matching decrypted credential (if
+  any) as `{username, domain, password, share_root}`. Password only
+  flows to the agent; never returned on the admin list. Requests
+  from IPs without an agent token fail.
+- Agent hook in `local_install`: before running localinstall.Run,
+  if the path starts with `\\`, the agent calls `agent_smb_creds`
+  and — when a credential matches — runs
+    `net use <share_root> /user:DOMAIN\user PW /persistent:no`
+  in a hidden cmd, does the install, then
+    `net use <share_root> /delete`
+  as a best-effort teardown. Password is redacted from the agent
+  log stream; only the share root + username are logged.
+- Settings tab grows a "Network shares" card parallel to "Local
+  installers": table + add/edit modal with write-only password field
+  (placeholder "keep current" when editing an existing row so admins
+  don't accidentally blank it out).
+
+Security note: AES-GCM with a per-install key gets password storage
+off the "plaintext in DB" level. The weakest remaining link is the
+server filesystem — anyone who roots the server host can read the
+key and decrypt any stored password. Compromised admins can still
+exfiltrate via the agent (the agent legitimately receives the
+plaintext). This is the same trust model as Windows credential
+manager; documented but not magically fixed.
+
 ### 1.7.1 — Local-file installer with framework detection
 
 **Minor** — new admin-curated install path that works for anything

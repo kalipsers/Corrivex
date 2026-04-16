@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/markov/corrivex/internal/localinstall"
@@ -45,6 +47,20 @@ func (r *Runtime) runLocalInstall(idStr string) (string, int) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
+
+	// If the path is a UNC share, attempt to authenticate against it via
+	// `net use` using a stored SMB credential. Non-UNC paths and UNC
+	// paths without a matching credential proceed unauthenticated; the
+	// installer call itself will fail with "access denied" if the agent's
+	// SYSTEM account can't reach the share.
+	var teardown func()
+	if strings.HasPrefix(spec.Installer.Path, `\\`) {
+		teardown = r.mountSMBIfNeeded(spec.Installer.Path)
+	}
+	if teardown != nil {
+		defer teardown()
+	}
+
 	r.log("local_install [%d] %s → %s", id, spec.Installer.Name, spec.Installer.Path)
 	res, err := localinstall.Run(ctx, localinstall.RunOptions{
 		Path:          spec.Installer.Path,
@@ -57,6 +73,113 @@ func (r *Runtime) runLocalInstall(idStr string) (string, int) {
 	}
 	r.log("  → %s", res.String())
 	return res.Output, res.ExitCode
+}
+
+// smbCredResp is the decrypted credential the server hands over for a
+// single local_install call.
+type smbCredResp struct {
+	ShareRoot string `json:"share_root"`
+	Username  string `json:"username"`
+	Domain    string `json:"domain"`
+	Password  string `json:"password"`
+}
+
+// mountSMBIfNeeded looks up a stored SMB credential whose share_root is
+// a prefix of `path` and calls `net use` to mount it. Returns a
+// teardown closure that runs `net use <share> /delete`; nil if nothing
+// was mounted. Password is never logged — the agent log stream only
+// mentions the share root and username.
+func (r *Runtime) mountSMBIfNeeded(path string) func() {
+	cred, err := r.fetchSMBCred(path)
+	if err != nil {
+		r.log("smb creds fetch: %v (proceeding without auth)", err)
+		return nil
+	}
+	if cred == nil {
+		return nil
+	}
+	user := cred.Username
+	if cred.Domain != "" {
+		user = cred.Domain + `\` + cred.Username
+	}
+	r.log("smb: mapping %s as %s", cred.ShareRoot, user)
+	cmd := exec.Command("net", "use", cred.ShareRoot, "/user:"+user, cred.Password, "/persistent:no")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		r.log("smb: net use failed: %v — %s", err, firstLineSafe(out))
+		// Return nil so runLocalInstall doesn't schedule a teardown for a
+		// mapping that didn't happen.
+		return nil
+	}
+	root := cred.ShareRoot
+	return func() {
+		cmd := exec.Command("net", "use", root, "/delete")
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		_ = cmd.Run() // best-effort; never fails the install on teardown
+	}
+}
+
+func (r *Runtime) fetchSMBCred(path string) (*smbCredResp, error) {
+	u := fmt.Sprintf("%s/api/?action=agent_smb_creds&hostname=%s&path=%s",
+		strings.TrimRight(r.Cfg.Server, "/"), mustHost(), urlEscape(path))
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if r.Cfg.APISecret != "" {
+		req.Header.Set("X-API-Secret", r.Cfg.APISecret)
+	}
+	if r.Cfg.AgentToken != "" {
+		req.Header.Set("X-Corrivex-Token", r.Cfg.AgentToken)
+	}
+	cli := &http.Client{Timeout: 10 * time.Second}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return nil, nil
+	}
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var out smbCredResp
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// urlEscape is a tiny replacement for url.QueryEscape that keeps the
+// agent.go imports clean. Handles the characters we actually see in
+// UNC paths (backslash, space, colon).
+func urlEscape(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_' || c == '~' {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "%%%02X", c)
+	}
+	return b.String()
+}
+
+func firstLineSafe(b []byte) string {
+	for i, c := range b {
+		if c == '\n' || c == '\r' {
+			return string(b[:i])
+		}
+	}
+	return string(b)
 }
 
 // installerSpec mirrors the JSON shape emitted by the server's

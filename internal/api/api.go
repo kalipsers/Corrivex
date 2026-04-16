@@ -105,6 +105,9 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case method == "GET" && action == "agent_local_installer":
 		s.agentLocalInstaller(w, r)
 		return
+	case method == "GET" && action == "agent_smb_creds":
+		s.agentSMBCreds(w, r)
+		return
 	// ---- auth endpoints (no session required) --------------------------
 	case method == "GET" && action == "auth_state":
 		s.authState(w, r)
@@ -183,6 +186,12 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.saveLocalInstaller)
 	case method == "POST" && action == "delete_local_installer":
 		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.deleteLocalInstaller)
+	case method == "GET" && action == "list_smb_credentials":
+		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.listSMBCredentials)
+	case method == "POST" && action == "save_smb_credential":
+		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.saveSMBCredential)
+	case method == "POST" && action == "delete_smb_credential":
+		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.deleteSMBCredential)
 	case method == "GET" && action == "vendor_versions":
 		s.vendorVersions(w, r)
 	case method == "GET" && action == "reports_summary":
@@ -1289,6 +1298,100 @@ func (s *Server) deleteLocalInstaller(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// -- SMB credential CRUD (1.7.2) ------------------------------------------
+
+func (s *Server) listSMBCredentials(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.DB.ListSMBCredentials()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if rows == nil {
+		rows = []db.SMBCredential{}
+	}
+	writeJSON(w, 200, rows)
+}
+
+func (s *Server) saveSMBCredential(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ShareRoot string `json:"share_root"`
+		Username  string `json:"username"`
+		Domain    string `json:"domain"`
+		Password  string `json:"password"`
+		Notes     string `json:"notes"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad json"})
+		return
+	}
+	body.ShareRoot = strings.TrimSpace(body.ShareRoot)
+	body.Username = strings.TrimSpace(body.Username)
+	if !strings.HasPrefix(body.ShareRoot, `\\`) {
+		writeJSON(w, 400, map[string]string{"error": "share_root must be a UNC path beginning with \\\\"})
+		return
+	}
+	id, err := s.DB.UpsertSMBCredential(db.SMBCredential{
+		ShareRoot: body.ShareRoot,
+		Username:  body.Username,
+		Domain:    body.Domain,
+		Notes:     body.Notes,
+	}, body.Password)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "status": "ok"})
+}
+
+func (s *Server) deleteSMBCredential(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID int64 `json:"id"`
+	}
+	if err := decode(r, &body); err != nil || body.ID <= 0 {
+		writeJSON(w, 400, map[string]string{"error": "Missing id"})
+		return
+	}
+	if err := s.DB.DeleteSMBCredential(body.ID); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// agentSMBCreds returns the decrypted credential whose share_root is
+// the longest prefix of the path parameter, or 404 if none match.
+// TOFU-token authenticated.
+func (s *Server) agentSMBCreds(w http.ResponseWriter, r *http.Request) {
+	hostname := s.normalizeHost(r.URL.Query().Get("hostname"))
+	if hostname == "" {
+		writeJSON(w, 400, map[string]string{"error": "Missing hostname"})
+		return
+	}
+	if _, ok := s.authAgent(w, r, hostname); !ok {
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeJSON(w, 400, map[string]string{"error": "Missing path"})
+		return
+	}
+	c, err := s.DB.LookupSMBCredential(path)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if c == nil {
+		writeJSON(w, 404, map[string]string{"error": "no matching credential"})
+		return
+	}
+	writeJSON(w, 200, map[string]string{
+		"share_root": c.ShareRoot,
+		"username":   c.Username,
+		"domain":     c.Domain,
+		"password":   c.Password,
+	})
 }
 
 // looksLikeWindowsPath accepts C:\Something\... style. Does not resolve
