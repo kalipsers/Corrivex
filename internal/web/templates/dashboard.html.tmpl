@@ -1088,6 +1088,11 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
           <div class="hint">How often the service performs a full inventory and upgrade-check.</div>
         </div>
         <div class="field">
+          <label for="s-winget-timeout">Winget package timeout (minutes)</label>
+          <input type="number" min="1" id="s-winget-timeout" value="{{.Settings.winget_package_timeout_minutes}}">
+          <div class="hint">Maximum runtime for one package update before the agent kills it and continues with the next package.</div>
+        </div>
+        <div class="field">
           <label for="s-svc">Windows service name</label>
           <input type="text" id="s-svc" value="{{.Settings.service_name}}">
           <div class="hint">Shown in services.msc on managed devices.</div>
@@ -1707,8 +1712,8 @@ function renderDeviceModal(pc) {
       const pid = p.id || '';
       const pname = p.name || '';
       const effectiveStatus = allUpgradeState || pkgLiveStatus[pid]?.status || '';
-      const rowCls = effectiveStatus === 'delivered' || effectiveStatus === 'pending' ? ' is-running' : '';
-      const disabled = effectiveStatus === 'pending' || effectiveStatus === 'delivered';
+      const rowCls = effectiveStatus === 'delivered' || effectiveStatus === 'pending' || effectiveStatus === 'running' ? ' is-running' : '';
+      const disabled = effectiveStatus === 'pending' || effectiveStatus === 'delivered' || effectiveStatus === 'running';
       html += '<label class="pkg' + rowCls + '" data-pkg-row="' + escapeHTML(pid) + '">';
       html += '<input type="checkbox" class="pkg-check" data-id="' + escapeHTML(pid) + '" data-name="' + escapeHTML(pname) + '"' + (disabled ? ' disabled' : '') + '>';
       html += '<div><strong>' + escapeHTML(pname || pid || '?') + '</strong><div class="pkg-id">' + escapeHTML(pid) + '</div></div>';
@@ -2392,6 +2397,17 @@ function handleWsEvent(ev) {
       // a post_task_report → 'pc' event that refreshes the full modal and
       // drops any package that's no longer pending. Nothing more to do here.
     }
+  } else if (ev.type === 'task_progress' && ev.data) {
+    const modalTitle = document.getElementById('device-modal-title');
+    const open = modal.classList.contains('is-open') && modalTitle && modalTitle.textContent === ev.data.hostname;
+    if (open && ev.data.package_id) {
+      setPkgRowStatus(ev.data.package_id, ev.data.status, { flash: ev.data.status === 'completed' || ev.data.status === 'failed' || ev.data.status === 'timeout' });
+      const detail = ev.data.package_name || ev.data.package_id;
+      appendLogLine({
+        ts: new Date().toLocaleTimeString(),
+        line: 'task progress: ' + detail + ' -> ' + ev.data.status + (ev.data.result ? (' (' + ev.data.result + ')') : '')
+      });
+    }
   } else if (ev.type === 'pc_online' && ev.data) {
     updateOnlinePill(ev.data.hostname, !!ev.data.online);
   } else if (ev.type === 'log' && ev.data) {
@@ -2629,8 +2645,10 @@ function pkgStatusChip(status) {
   switch (status) {
     case 'pending':   return '<span class="chip info" title="Queued — waiting for the agent to pick it up"><span class="dot"></span>queued</span>';
     case 'delivered': return '<span class="chip info" title="Running on the host"><span class="dot is-spin"></span>running</span>';
+    case 'running':   return '<span class="chip info" title="Running on the host"><span class="dot is-spin"></span>running</span>';
     case 'completed': return '<span class="chip ok" title="Completed"><span class="dot"></span>done</span>';
     case 'failed':    return '<span class="chip danger" title="Failed"><span class="dot"></span>failed</span>';
+    case 'timeout':   return '<span class="chip danger" title="Timed out and was killed"><span class="dot"></span>timeout</span>';
     default:          return '';
   }
 }
@@ -2650,16 +2668,16 @@ function setPkgRowStatus(pid, status, opts) {
   const chip = row.querySelector('.pkg-status');
   if (chip) chip.innerHTML = pkgStatusChip(status);
   row.classList.remove('is-running', 'is-done', 'is-failed');
-  if (status === 'pending' || status === 'delivered') {
+  if (status === 'pending' || status === 'delivered' || status === 'running') {
     row.classList.add('is-running');
   } else if (status === 'completed') {
     row.classList.add('is-done');
-  } else if (status === 'failed') {
+  } else if (status === 'failed' || status === 'timeout') {
     row.classList.add('is-failed');
   }
   const cb = row.querySelector('.pkg-check');
   const btn = row.querySelector('button[data-action="upgrade-one"]');
-  const locked = status === 'pending' || status === 'delivered';
+  const locked = status === 'pending' || status === 'delivered' || status === 'running';
   if (cb) cb.disabled = locked;
   if (btn) {
     btn.disabled = locked;
@@ -2676,11 +2694,12 @@ function setPkgRowStatus(pid, status, opts) {
 // Update the global "Upgrade all" button when an upgrade_all task comes in.
 function setAllUpgradeState(status) {
   const btn = document.getElementById('upgrade-all-btn');
+  const running = status === 'pending' || status === 'delivered' || status === 'running';
   if (btn) {
-    const running = status === 'pending' || status === 'delivered';
     btn.disabled = running;
     btn.textContent = status === 'pending' ? 'Upgrading all…' : status === 'delivered' ? 'Running…' : 'Upgrade all';
   }
+  if (!running) return;
   // Paint every pkg row with the same status until a fresh pc update arrives.
   document.querySelectorAll('label.pkg[data-pkg-row]').forEach(row => {
     setPkgRowStatus(row.dataset.pkgRow, status || 'pending');
@@ -3102,6 +3121,7 @@ document.getElementById('save-settings-btn')?.addEventListener('click', async ()
   const payload = {
     check_interval_minutes: document.getElementById('s-check').value,
     full_scan_interval_hours: document.getElementById('s-scan').value,
+    winget_package_timeout_minutes: document.getElementById('s-winget-timeout').value,
     service_name: document.getElementById('s-svc').value,
   };
   try {

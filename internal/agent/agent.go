@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -54,14 +55,30 @@ type Runtime struct {
 	// live. log() tees every line into it as {type:"log",line:...} so the
 	// server can stream to the dashboard in real time.
 	wsSend chan []byte
+
+	taskQueue  chan TaskRequest
+	taskWG     sync.WaitGroup
+	workerOnce sync.Once
+	activeMu   sync.Mutex
+	activeTask string
+
+	listUpgrades     func() ([]winget.Package, error)
+	runWingetTask    func(context.Context, TaskRequest, time.Duration, func(string, ...any)) (string, int)
+	reportTaskResult func(TaskRequest, string)
+	postMutationScan func(int)
 }
 
 func New(cfg Config, dataDir string, logf func(string, ...any)) *Runtime {
 	r := &Runtime{
 		Cfg: cfg, DataDir: dataDir, Logf: logf,
-		http: &http.Client{Timeout: 60 * time.Second},
+		http:      &http.Client{Timeout: 60 * time.Second},
+		taskQueue: make(chan TaskRequest, 128),
 	}
 	r.selfSha = selfSHA256()
+	r.listUpgrades = winget.ListUpgrades
+	r.runWingetTask = r.defaultRunWingetTask
+	r.reportTaskResult = r.defaultReportTaskResult
+	r.postMutationScan = r.defaultPostMutationScan
 	return r
 }
 
@@ -123,6 +140,7 @@ func (r *Runtime) Run(ctx context.Context) {
 	r.log("Corrivex agent v%s starting (server=%s, scan=%dh, self=%s)",
 		version.Version, r.Cfg.Server, r.Cfg.ScanHrs, shortHash(r.selfSha))
 	cleanupStaleBinary()
+	r.startTaskWorker(ctx)
 	r.safe(func() { r.checkSelfUpdate() })
 
 	backoff := time.Second
@@ -268,7 +286,9 @@ func (r *Runtime) runSession(parent context.Context) error {
 		if err != nil {
 			return err
 		}
-		var env struct{ Type string `json:"type"` }
+		var env struct {
+			Type string `json:"type"`
+		}
 		if json.Unmarshal(data, &env) != nil {
 			continue
 		}
@@ -283,7 +303,7 @@ func (r *Runtime) runSession(parent context.Context) error {
 				Task TaskRequest `json:"task"`
 			}
 			if err := json.Unmarshal(data, &m); err == nil {
-				go r.safe(func() { r.RunTasks([]TaskRequest{m.Task}) })
+				r.enqueueTask(m.Task)
 			}
 		}
 	}
@@ -483,7 +503,9 @@ func (r *Runtime) FullScan() {
 	}
 	r.log("full report sent; %d task(s) returned", len(resp.Tasks))
 	if len(resp.Tasks) > 0 {
-		r.RunTasks(resp.Tasks)
+		for _, t := range resp.Tasks {
+			r.enqueueTask(t)
+		}
 	}
 }
 
@@ -510,6 +532,105 @@ func (r *Runtime) postTaskReport() {
 // refreshes source state and retries once. This catches the case where a
 // stale source-agreement record made winget refuse even though our flag
 // set already includes --accept-*-agreements.
+func (r *Runtime) startTaskWorker(ctx context.Context) {
+	r.workerOnce.Do(func() {
+		go r.taskWorker(ctx)
+		go r.taskWatchdog(ctx)
+	})
+}
+
+func (r *Runtime) enqueueTask(t TaskRequest) bool {
+	r.taskWG.Add(1)
+	select {
+	case r.taskQueue <- t:
+		return true
+	default:
+		r.taskWG.Done()
+		r.log("task queue full; dropping task #%d (%s)", t.ID, t.Type)
+		r.reportTaskResult(t, "error: task queue full")
+		return false
+	}
+}
+
+func (r *Runtime) waitTaskQueueIdle(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		r.taskWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+func (r *Runtime) taskWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case t := <-r.taskQueue:
+			r.setActiveTask(fmt.Sprintf("#%d %s %s", t.ID, t.Type, t.PackageID))
+			func() {
+				defer func() {
+					if p := recover(); p != nil {
+						r.log("task worker recovered panic in task #%d: %v", t.ID, p)
+						r.reportTaskResult(t, "error: panic")
+					}
+					r.clearActiveTask()
+					r.taskWG.Done()
+				}()
+				r.RunTasks([]TaskRequest{t})
+			}()
+		}
+	}
+}
+
+func (r *Runtime) taskWatchdog(ctx context.Context) {
+	t := time.NewTicker(2 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.activeMu.Lock()
+			active := r.activeTask
+			r.activeMu.Unlock()
+			if active != "" {
+				r.log("task worker heartbeat: active %s", active)
+			}
+		}
+	}
+}
+
+func (r *Runtime) setActiveTask(s string) {
+	r.activeMu.Lock()
+	r.activeTask = s
+	r.activeMu.Unlock()
+}
+
+func (r *Runtime) clearActiveTask() {
+	r.activeMu.Lock()
+	r.activeTask = ""
+	r.activeMu.Unlock()
+}
+
+func (r *Runtime) wingetPackageTimeout() time.Duration {
+	return parseWingetPackageTimeout(r.fetchAgentConfig())
+}
+
+func parseWingetPackageTimeout(cfg map[string]string) time.Duration {
+	if cfg != nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(cfg["winget_package_timeout_minutes"])); err == nil && n > 0 {
+			return time.Duration(n) * time.Minute
+		}
+	}
+	return 20 * time.Minute
+}
+
 func (r *Runtime) wingetRetry(fn func() (string, int)) (string, int) {
 	out, code := fn()
 	const agreementsErr = -1978334959 // 0x8A150111
@@ -523,28 +644,135 @@ func (r *Runtime) wingetRetry(fn func() (string, int)) (string, int) {
 	return out, code
 }
 
+func (r *Runtime) defaultRunWingetTask(ctx context.Context, t TaskRequest, timeout time.Duration, logf func(string, ...any)) (string, int) {
+	switch t.Type {
+	case "upgrade_package":
+		return r.wingetRetry(func() (string, int) {
+			return winget.RunUpgradeIDMonitored(ctx, t.PackageID, timeout, logf)
+		})
+	case "install_package":
+		return r.wingetRetry(func() (string, int) {
+			return winget.RunInstallMonitored(ctx, t.PackageID, t.PackageVersion, timeout, logf)
+		})
+	case "uninstall_package":
+		return r.wingetRetry(func() (string, int) {
+			return winget.RunUninstallMonitored(ctx, t.PackageID, timeout, logf)
+		})
+	}
+	return "unsupported winget task", -1
+}
+
+func (r *Runtime) runUpgradeAllSequential(ctx context.Context, parent TaskRequest, timeout time.Duration) (string, int) {
+	pkgs, err := r.listUpgrades()
+	if err != nil {
+		return "list upgrades: " + err.Error(), -1
+	}
+	total, completed, failed, timedOut := 0, 0, 0, 0
+	finalCode := 0
+	for _, p := range pkgs {
+		if strings.TrimSpace(p.ID) == "" {
+			continue
+		}
+		total++
+		child := TaskRequest{ID: parent.ID, Type: "upgrade_package", PackageID: p.ID, PackageName: p.Name}
+		start := time.Now()
+		r.log("upgrade_all: starting %s (%s)", p.Name, p.ID)
+		r.sendTaskProgress(child, "running", "started", 0)
+		out, code := r.runWingetTask(ctx, child, timeout, r.log)
+		result := winget.ExitCodeResult(code)
+		status := "completed"
+		if code == winget.TimeoutExitCode {
+			status = "timeout"
+			timedOut++
+			finalCode = winget.TimeoutExitCode
+		} else if code != 0 {
+			status = "failed"
+			failed++
+			if finalCode == 0 {
+				finalCode = code
+			}
+		} else {
+			completed++
+		}
+		if code == -1 && !strings.HasPrefix(out, "exit") {
+			result = "error: " + firstLine(out)
+		}
+		r.log("upgrade_all: %s (%s) => %s", p.Name, p.ID, result)
+		r.sendTaskProgress(child, status, result, int(time.Since(start).Seconds()))
+	}
+	summary := fmt.Sprintf("completed=%d failed=%d timeout=%d total=%d", completed, failed, timedOut, total)
+	if finalCode == winget.TimeoutExitCode {
+		return "timeout_killed " + summary, finalCode
+	}
+	if finalCode != 0 {
+		return "failed " + summary, finalCode
+	}
+	return summary, 0
+}
+
+func (r *Runtime) sendTaskProgress(t TaskRequest, status, result string, elapsed int) {
+	r.sendWS(map[string]any{
+		"type":            "task_progress",
+		"task_id":         t.ID,
+		"hostname":        mustHost(),
+		"package_id":      t.PackageID,
+		"package_name":    t.PackageName,
+		"status":          status,
+		"result":          result,
+		"elapsed_seconds": elapsed,
+	})
+}
+
+func (r *Runtime) defaultReportTaskResult(t TaskRequest, result string) {
+	if !r.sendWS(map[string]any{
+		"type": "task_result", "task_id": t.ID, "hostname": mustHost(), "result": result,
+	}) {
+		r.post("task_result", map[string]any{
+			"task_id": t.ID, "hostname": mustHost(), "result": result,
+		})
+	}
+}
+
+func (r *Runtime) defaultPostMutationScan(taskCount int) {
+	r.log("re-scanning installed packages after %d task(s)", taskCount)
+	// Refresh winget's source index so the subsequent list call sees
+	// the real post-upgrade state. Without this step winget sometimes
+	// reports a just-upgraded package as still upgradable for several
+	// seconds, which was leaving rows stuck in the dashboard.
+	if _, code := winget.SourceUpdate(); code != 0 {
+		r.log("  winget source update returned %s (non-fatal)", winget.ExitCodeResult(code))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	r.fullScanWS(ctx)
+}
+
 // RunTasks executes tasks and posts results. After the batch finishes, if any
 // task mutated the installed-package set (upgrade/install/uninstall), the
 // agent re-runs `winget upgrade` and pushes a post_task_report so the server
 // — and every WebSocket client — sees the fresh pending-update list.
 func (r *Runtime) RunTasks(tasks []TaskRequest) {
 	mutated := false
+	timeout := r.wingetPackageTimeout()
 	for _, t := range tasks {
 		r.log("task #%d: %s %s", t.ID, t.Type, t.PackageID)
 		var out string
 		var code int
 		switch t.Type {
 		case "upgrade_all":
-			out, code = r.wingetRetry(winget.RunUpgradeAll)
+			out, code = r.runUpgradeAllSequential(context.Background(), t, timeout)
 			mutated = true
-		case "upgrade_package":
-			out, code = r.wingetRetry(func() (string, int) { return winget.RunUpgradeID(t.PackageID) })
-			mutated = true
-		case "install_package":
-			out, code = r.wingetRetry(func() (string, int) { return winget.RunInstall(t.PackageID, t.PackageVersion) })
-			mutated = true
-		case "uninstall_package":
-			out, code = r.wingetRetry(func() (string, int) { return winget.RunUninstall(t.PackageID) })
+		case "upgrade_package", "install_package", "uninstall_package":
+			r.sendTaskProgress(t, "running", "started", 0)
+			start := time.Now()
+			out, code = r.runWingetTask(context.Background(), t, timeout, r.log)
+			status := "completed"
+			if code == winget.TimeoutExitCode {
+				status = "timeout"
+			} else if code != 0 {
+				status = "failed"
+			}
+			r.sendTaskProgress(t, status, winget.ExitCodeResult(code), int(time.Since(start).Seconds()))
 			mutated = true
 		case "windows_update_all":
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
@@ -586,29 +814,17 @@ func (r *Runtime) RunTasks(tasks []TaskRequest) {
 		result := winget.ExitCodeResult(code)
 		if code == -1 && !strings.HasPrefix(out, "exit") {
 			result = "error: " + firstLine(out)
+		} else if code == winget.TimeoutExitCode {
+			result = "timeout_killed"
+			if strings.TrimSpace(out) != "" {
+				result += ": " + firstLine(out)
+			}
 		}
 		r.log("  task #%d => %s", t.ID, result)
-		// Prefer WS; fall back to HTTP if the session went down while running.
-		if !r.sendWS(map[string]any{
-			"type": "task_result", "task_id": t.ID, "hostname": mustHost(), "result": result,
-		}) {
-			r.post("task_result", map[string]any{
-				"task_id": t.ID, "hostname": mustHost(), "result": result,
-			})
-		}
+		r.reportTaskResult(t, result)
 	}
 	if mutated {
-		r.log("re-scanning installed packages after %d task(s)", len(tasks))
-		// Refresh winget's source index so the subsequent list call sees
-		// the real post-upgrade state. Without this step winget sometimes
-		// reports a just-upgraded package as still upgradable for several
-		// seconds, which was leaving rows stuck in the dashboard.
-		if _, code := winget.SourceUpdate(); code != 0 {
-			r.log("  winget source update returned %s (non-fatal)", winget.ExitCodeResult(code))
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		r.fullScanWS(ctx)
+		r.postMutationScan(len(tasks))
 	}
 }
 

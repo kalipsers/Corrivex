@@ -227,6 +227,7 @@ var migrations = []struct {
 		`INSERT IGNORE INTO settings (key_name, value) VALUES
 			('check_interval_minutes',  '1'),
 			('full_scan_interval_hours','24'),
+			('winget_package_timeout_minutes','20'),
 			('install_service',         'true'),
 			('service_name',            'Corrivex Agent')`,
 	}},
@@ -504,6 +505,7 @@ var migrationsSQLite = []struct {
 		)`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('check_interval_minutes','1')`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('full_scan_interval_hours','24')`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('winget_package_timeout_minutes','20')`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('install_service','true')`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('service_name','Corrivex Agent')`,
 	}},
@@ -798,17 +800,17 @@ func (d *DB) RemoveAllowedDomain(id int) error {
 // -- Tasks ------------------------------------------------------------------
 
 type Task struct {
-	ID             int64          `json:"id"`
-	Hostname       string         `json:"hostname"`
-	Type           string         `json:"type"`
-	PackageID      *string        `json:"package_id"`
-	PackageName    *string        `json:"package_name"`
-	PackageVersion *string        `json:"package_version"`
-	Status         string         `json:"status"`
-	CreatedAt      time.Time      `json:"created_at"`
-	DeliveredAt    *time.Time     `json:"delivered_at"`
-	CompletedAt    *time.Time     `json:"completed_at"`
-	Result         *string        `json:"result"`
+	ID             int64      `json:"id"`
+	Hostname       string     `json:"hostname"`
+	Type           string     `json:"type"`
+	PackageID      *string    `json:"package_id"`
+	PackageName    *string    `json:"package_name"`
+	PackageVersion *string    `json:"package_version"`
+	Status         string     `json:"status"`
+	CreatedAt      time.Time  `json:"created_at"`
+	DeliveredAt    *time.Time `json:"delivered_at"`
+	CompletedAt    *time.Time `json:"completed_at"`
+	Result         *string    `json:"result"`
 }
 
 func (d *DB) CreateTask(hostname, typ string, pkgID, pkgName, pkgVer *string) (int64, error) {
@@ -2334,10 +2336,10 @@ func (d *DB) AllCVEFindings() ([]CVEHostFinding, error) {
 
 // ReportSummary is the set of counters rendered in the Reports tab top cards.
 type ReportSummary struct {
-	Devices            int `json:"devices"`
-	InstalledPackages  int `json:"installed_packages"`
-	DistinctAdmins     int `json:"distinct_local_admins"`
-	OpenCVEs           int `json:"open_cves"`
+	Devices           int `json:"devices"`
+	InstalledPackages int `json:"installed_packages"`
+	DistinctAdmins    int `json:"distinct_local_admins"`
+	OpenCVEs          int `json:"open_cves"`
 }
 
 // ReportsSummary computes the four counters shown on the Reports tab.

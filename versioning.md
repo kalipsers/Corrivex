@@ -55,6 +55,27 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.9.0 — Isolated winget package updates + task autohealing
+
+**Minor** — agent-side update execution is now bounded and observable.
+
+- Winget install / upgrade / uninstall operations now run as monitored child
+  processes with live stdout/stderr streaming to the dashboard log pane.
+- `upgrade_all` no longer calls `winget upgrade --all`. The agent refreshes
+  the pending-upgrade list, upgrades one package at a time, reports
+  per-package progress, and continues after a package fails or times out.
+- New setting `winget_package_timeout_minutes` (default `20`) controls how
+  long one winget package process may run before Corrivex kills the process
+  tree and moves on.
+- Agent task execution is serialized through one worker queue so multiple
+  dashboard clicks cannot start overlapping winget mutations on the same host.
+  The worker recovers from panics and logs heartbeat lines while a task is
+  active.
+- Agent WebSocket frames now include `task_progress` events for per-package
+  `running`, `completed`, `failed`, and `timeout` updates. The server fans
+  these out to the dashboard, which updates package rows and appends progress
+  lines without waiting for the final post-task rescan.
+
 ### 1.8.0 — Remove chocolatey integration
 
 **Minor** — feature removal. Chocolatey support (1.7.0 / 1.7.3 / 1.7.4,

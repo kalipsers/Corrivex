@@ -37,15 +37,15 @@ type CVEKicker interface {
 }
 
 type Server struct {
-	DB           *db.DB
-	AgentBinary  []byte // embedded corrivex-agent.exe
-	AgentSHA256  string // hex sha256 of AgentBinary
-	APISecret    string // empty disables auth
-	Broker       *events.Broker
-	Hub          *hub.Hub
-	CVE          CVEKicker // nil when scanning is disabled
-	mux          *http.ServeMux
-	hostRe       *regexp.Regexp
+	DB          *db.DB
+	AgentBinary []byte // embedded corrivex-agent.exe
+	AgentSHA256 string // hex sha256 of AgentBinary
+	APISecret   string // empty disables auth
+	Broker      *events.Broker
+	Hub         *hub.Hub
+	CVE         CVEKicker // nil when scanning is disabled
+	mux         *http.ServeMux
+	hostRe      *regexp.Regexp
 }
 
 func New(d *db.DB, agentBin []byte, secret string, br *events.Broker, hb *hub.Hub) *Server {
@@ -320,10 +320,11 @@ func (s *Server) setSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowed := map[string]bool{
-		"check_interval_minutes":   true,
-		"full_scan_interval_hours": true,
-		"install_service":          true,
-		"service_name":             true,
+		"check_interval_minutes":         true,
+		"full_scan_interval_hours":       true,
+		"winget_package_timeout_minutes": true,
+		"install_service":                true,
+		"service_name":                   true,
 	}
 	for k, v := range body {
 		if !allowed[k] {
@@ -618,10 +619,15 @@ func (s *Server) agentConfig(w http.ResponseWriter, r *http.Request) {
 		"reg_scan_min_name_length",
 		"reg_scan_custom_skip_patterns",
 		"reg_scan_custom_skip_publishers",
+		"winget_package_timeout_minutes",
 	}
 	out := make(map[string]string, len(keys))
 	for _, k := range keys {
-		out[k] = s.DB.Setting(k, "")
+		def := ""
+		if k == "winget_package_timeout_minutes" {
+			def = "20"
+		}
+		out[k] = s.DB.Setting(k, def)
 	}
 	writeJSON(w, 200, out)
 }
@@ -657,8 +663,8 @@ func (s *Server) agentLocalInstaller(w http.ResponseWriter, r *http.Request) {
 	// whitelist locally (defence in depth: server writes into the field
 	// too when admins save a row).
 	writeJSON(w, 200, map[string]any{
-		"installer":         li,
-		"allowed_prefixes":  s.DB.Setting("local_installer_allowed_prefixes", ""),
+		"installer":        li,
+		"allowed_prefixes": s.DB.Setting("local_installer_allowed_prefixes", ""),
 	})
 }
 
@@ -898,7 +904,9 @@ func (s *Server) agentWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentFrame(hostname string, data []byte, r *http.Request) {
-	var env struct{ Type string `json:"type"` }
+	var env struct {
+		Type string `json:"type"`
+	}
 	if err := json.Unmarshal(data, &env); err != nil {
 		return
 	}
@@ -947,6 +955,27 @@ func (s *Server) handleAgentFrame(hostname string, data []byte, r *http.Request)
 			}
 		}
 		s.Broker.Publish("task", evt)
+	case "task_progress":
+		var body struct {
+			TaskID         int64  `json:"task_id"`
+			PackageID      string `json:"package_id"`
+			PackageName    string `json:"package_name"`
+			Status         string `json:"status"`
+			Result         string `json:"result"`
+			ElapsedSeconds int    `json:"elapsed_seconds"`
+		}
+		if err := json.Unmarshal(data, &body); err != nil || body.TaskID == 0 {
+			return
+		}
+		s.Broker.Publish("task_progress", map[string]any{
+			"task_id":         body.TaskID,
+			"hostname":        hostname,
+			"package_id":      body.PackageID,
+			"package_name":    body.PackageName,
+			"status":          body.Status,
+			"result":          body.Result,
+			"elapsed_seconds": body.ElapsedSeconds,
+		})
 	case "log":
 		var body struct {
 			Line  string `json:"line"`
@@ -981,6 +1010,7 @@ func classifyResult(result string) string {
 		return "completed"
 	}
 	if strings.HasPrefix(r, "error:") || strings.HasPrefix(r, "exit:") ||
+		strings.Contains(r, "timeout_killed") ||
 		strings.Contains(r, "not_found") || strings.Contains(r, "no_applicable") {
 		return "failed"
 	}
@@ -1063,7 +1093,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		"upgrade_all": true, "upgrade_package": true, "install_package": true,
 		"uninstall_package": true, "check": true,
 		"windows_update_all": true, "windows_update_single": true,
-		"full_scan": true,
+		"full_scan":     true,
 		"local_install": true,
 	}
 	if hostname == "" || !valid[body.Type] {
@@ -1109,11 +1139,11 @@ func (s *Server) pushTaskIfOnline(hostname string, id int64, typ, pkgID, pkgName
 	payload := map[string]any{
 		"type": "task",
 		"task": map[string]any{
-			"id":               id,
-			"type":             typ,
-			"package_id":       pkgID,
-			"package_name":     pkgName,
-			"package_version":  pkgVer,
+			"id":              id,
+			"type":            typ,
+			"package_id":      pkgID,
+			"package_name":    pkgName,
+			"package_version": pkgVer,
 		},
 	}
 	raw, err := json.Marshal(payload)

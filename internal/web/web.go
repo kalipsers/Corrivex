@@ -103,9 +103,10 @@ func (h *Dashboard) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		apiURL)
 
 	for k, def := range map[string]string{
-		"check_interval_minutes":   "1",
-		"full_scan_interval_hours": "24",
-		"service_name":             "Corrivex Agent",
+		"check_interval_minutes":         "1",
+		"full_scan_interval_hours":       "24",
+		"winget_package_timeout_minutes": "20",
+		"service_name":                   "Corrivex Agent",
 	} {
 		if _, ok := settings[k]; !ok {
 			settings[k] = def
