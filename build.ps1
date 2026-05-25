@@ -44,7 +44,7 @@ $GoVersionInfo = 'github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.4
 
 function Need-Go {
     if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
-        throw 'go is not on PATH. Install Go 1.23+ and reopen the shell.'
+        throw 'go is not on PATH. Install Go 1.26.3+ and reopen the shell.'
     }
 }
 
