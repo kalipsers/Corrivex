@@ -49,6 +49,7 @@ type Runtime struct {
 	http    *http.Client
 	mu      sync.Mutex
 	logBuf  []string
+	liveLog []string
 	selfSha string
 
 	// wsSend is the per-session outbound queue. Non-nil while a session is
@@ -56,11 +57,12 @@ type Runtime struct {
 	// server can stream to the dashboard in real time.
 	wsSend chan []byte
 
-	taskQueue  chan TaskRequest
-	taskWG     sync.WaitGroup
-	workerOnce sync.Once
-	activeMu   sync.Mutex
-	activeTask string
+	taskQueue   chan TaskRequest
+	taskWG      sync.WaitGroup
+	workerOnce  sync.Once
+	activeMu    sync.Mutex
+	activeTask  *TaskRequest
+	queuedTasks map[int64]TaskRequest
 
 	listUpgrades     func() ([]winget.Package, error)
 	runWingetTask    func(context.Context, TaskRequest, time.Duration, func(string, ...any)) (string, int)
@@ -71,8 +73,9 @@ type Runtime struct {
 func New(cfg Config, dataDir string, logf func(string, ...any)) *Runtime {
 	r := &Runtime{
 		Cfg: cfg, DataDir: dataDir, Logf: logf,
-		http:      &http.Client{Timeout: 60 * time.Second},
-		taskQueue: make(chan TaskRequest, 128),
+		http:        &http.Client{Timeout: 60 * time.Second},
+		taskQueue:   make(chan TaskRequest, 128),
+		queuedTasks: make(map[int64]TaskRequest),
 	}
 	r.selfSha = selfSHA256()
 	r.listUpgrades = winget.ListUpgrades
@@ -102,6 +105,10 @@ func (r *Runtime) log(format string, args ...any) {
 	if len(r.logBuf) > 400 {
 		r.logBuf = r.logBuf[len(r.logBuf)-400:]
 	}
+	r.liveLog = append(r.liveLog, line)
+	if len(r.liveLog) > 400 {
+		r.liveLog = r.liveLog[len(r.liveLog)-400:]
+	}
 	sendCh := r.wsSend
 	r.mu.Unlock()
 	if r.Logf != nil {
@@ -125,6 +132,14 @@ func (r *Runtime) drainLog() string {
 	s := strings.Join(r.logBuf, "\n")
 	r.logBuf = nil
 	return s
+}
+
+func (r *Runtime) logTail() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.liveLog))
+	copy(out, r.liveLog)
+	return out
 }
 
 // Run keeps a WebSocket session open to the server for the duration of the
@@ -236,6 +251,7 @@ func (r *Runtime) runSession(parent context.Context) error {
 		r.wsSend = nil
 		r.mu.Unlock()
 	}()
+	r.sendTaskSnapshot("", true)
 
 	// Writer goroutine.
 	go func() {
@@ -305,6 +321,14 @@ func (r *Runtime) runSession(parent context.Context) error {
 			if err := json.Unmarshal(data, &m); err == nil {
 				r.enqueueTask(m.Task)
 			}
+		case "task_status_request":
+			var m struct {
+				RequestID      string `json:"request_id"`
+				IncludeLogTail bool   `json:"include_log_tail"`
+			}
+			if err := json.Unmarshal(data, &m); err == nil {
+				r.sendTaskSnapshot(m.RequestID, m.IncludeLogTail)
+			}
 		}
 	}
 }
@@ -346,6 +370,16 @@ type TaskRequest struct {
 	PackageID      string `json:"package_id"`
 	PackageName    string `json:"package_name"`
 	PackageVersion string `json:"package_version"`
+}
+
+type TaskSnapshot struct {
+	Type        string        `json:"type"`
+	RequestID   string        `json:"request_id,omitempty"`
+	Hostname    string        `json:"hostname"`
+	ActiveTask  *TaskRequest  `json:"active_task"`
+	QueuedTasks []TaskRequest `json:"queued_tasks"`
+	LogTail     []string      `json:"log_tail,omitempty"`
+	Timestamp   string        `json:"timestamp"`
 }
 
 func (r *Runtime) post(action string, body any) (*apiResp, error) {
@@ -541,10 +575,12 @@ func (r *Runtime) startTaskWorker(ctx context.Context) {
 
 func (r *Runtime) enqueueTask(t TaskRequest) bool {
 	r.taskWG.Add(1)
+	r.addQueuedTask(t)
 	select {
 	case r.taskQueue <- t:
 		return true
 	default:
+		r.removeQueuedTask(t.ID)
 		r.taskWG.Done()
 		r.log("task queue full; dropping task #%d (%s)", t.ID, t.Type)
 		r.reportTaskResult(t, "error: task queue full")
@@ -572,7 +608,8 @@ func (r *Runtime) taskWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case t := <-r.taskQueue:
-			r.setActiveTask(fmt.Sprintf("#%d %s %s", t.ID, t.Type, t.PackageID))
+			r.removeQueuedTask(t.ID)
+			r.setActiveTask(t)
 			func() {
 				defer func() {
 					if p := recover(); p != nil {
@@ -597,7 +634,10 @@ func (r *Runtime) taskWatchdog(ctx context.Context) {
 			return
 		case <-t.C:
 			r.activeMu.Lock()
-			active := r.activeTask
+			active := ""
+			if r.activeTask != nil {
+				active = fmt.Sprintf("#%d %s %s", r.activeTask.ID, r.activeTask.Type, r.activeTask.PackageID)
+			}
 			r.activeMu.Unlock()
 			if active != "" {
 				r.log("task worker heartbeat: active %s", active)
@@ -606,16 +646,60 @@ func (r *Runtime) taskWatchdog(ctx context.Context) {
 	}
 }
 
-func (r *Runtime) setActiveTask(s string) {
+func (r *Runtime) addQueuedTask(t TaskRequest) {
 	r.activeMu.Lock()
-	r.activeTask = s
+	r.queuedTasks[t.ID] = t
+	r.activeMu.Unlock()
+}
+
+func (r *Runtime) removeQueuedTask(id int64) {
+	r.activeMu.Lock()
+	delete(r.queuedTasks, id)
+	r.activeMu.Unlock()
+}
+
+func (r *Runtime) setActiveTask(t TaskRequest) {
+	r.activeMu.Lock()
+	task := t
+	r.activeTask = &task
 	r.activeMu.Unlock()
 }
 
 func (r *Runtime) clearActiveTask() {
 	r.activeMu.Lock()
-	r.activeTask = ""
+	r.activeTask = nil
 	r.activeMu.Unlock()
+}
+
+func (r *Runtime) taskSnapshot(requestID string, includeLogTail bool) TaskSnapshot {
+	r.activeMu.Lock()
+	var active *TaskRequest
+	if r.activeTask != nil {
+		task := *r.activeTask
+		active = &task
+	}
+	queued := make([]TaskRequest, 0, len(r.queuedTasks))
+	for _, task := range r.queuedTasks {
+		queued = append(queued, task)
+	}
+	r.activeMu.Unlock()
+
+	snap := TaskSnapshot{
+		Type:        "task_snapshot",
+		RequestID:   requestID,
+		Hostname:    mustHost(),
+		ActiveTask:  active,
+		QueuedTasks: queued,
+		Timestamp:   time.Now().Format(time.RFC3339),
+	}
+	if includeLogTail {
+		snap.LogTail = r.logTail()
+	}
+	return snap
+}
+
+func (r *Runtime) sendTaskSnapshot(requestID string, includeLogTail bool) {
+	r.sendWS(r.taskSnapshot(requestID, includeLogTail))
 }
 
 func (r *Runtime) wingetPackageTimeout() time.Duration {

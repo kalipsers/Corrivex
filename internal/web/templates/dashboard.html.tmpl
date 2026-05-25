@@ -1097,6 +1097,25 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
           <input type="text" id="s-svc" value="{{.Settings.service_name}}">
           <div class="hint">Shown in services.msc on managed devices.</div>
         </div>
+        <div class="field">
+          <label>CVE sources</label>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 14px">
+            <label><input type="checkbox" id="cve-src-nvd" checked> NVD CVE/CPE</label>
+            <label><input type="checkbox" id="cve-src-osv" checked> OSV</label>
+            <label><input type="checkbox" id="cve-src-github" checked> GitHub advisories</label>
+            <label><input type="checkbox" id="cve-src-epss" checked> FIRST EPSS</label>
+          </div>
+          <div class="hint">EPSS is prioritization metadata only; it never creates a finding by itself.</div>
+        </div>
+        <div class="field">
+          <label for="cve-min-confidence">Minimum NVD mapping confidence</label>
+          <select id="cve-min-confidence">
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+          <div class="hint">Higher confidence keeps CVE matching conservative and reduces false positives.</div>
+        </div>
         <div style="margin-top:18px;display:flex;justify-content:flex-end">
           <button class="btn btn-primary" id="save-settings-btn">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
@@ -1586,6 +1605,7 @@ async function viewDevice(host) {
   if (log && log.dataset.host !== host) {
     log.innerHTML = '';
     log.dataset.host = host;
+    liveLogKeys.clear();
     wuInstalledThisSession.clear();
   }
   openModal();
@@ -1594,8 +1614,35 @@ async function viewDevice(host) {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const pc = await res.json();
     renderDeviceModal(pc);
+    requestHostSync(host);
   } catch (e) {
     document.getElementById('device-modal-body').innerHTML = '<div class="banner is-err">Could not load device: ' + escapeHTML(e.message) + '</div>';
+  }
+}
+
+async function requestHostSync(host) {
+  try {
+    const res = await fetch(API + '?action=sync_host', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ hostname: host }),
+    });
+    const j = await res.json();
+    if (!res.ok || j.error) throw new Error(j.error || 'HTTP ' + res.status);
+    if (j.status === 'offline') {
+      appendLogLine({
+        hostname: host,
+        ts: new Date().toLocaleTimeString(),
+        line: 'agent is offline; live task status cannot be verified yet',
+      });
+    }
+  } catch (err) {
+    appendLogLine({
+      hostname: host,
+      ts: new Date().toLocaleTimeString(),
+      line: 'live task status check failed: ' + String(err.message || err),
+    });
   }
 }
 
@@ -1875,6 +1922,7 @@ function bindModalTabs() {
 // time a new modal opens.
 window.__cveByPkg = {};
 window.__cveFindings = [];
+window.__cveScanStatus = [];
 window.__cveHost = '';
 
 // prefetchCVEForCurrentHost populates the per-package chips + footer badge
@@ -1889,15 +1937,26 @@ async function prefetchCVEForCurrentHost() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const findings = await res.json();
     window.__cveFindings = findings || [];
+    window.__cveScanStatus = await loadCVEScanStatus(host);
     indexCVEFindingsByPkg(findings || []);
     populateWingetCVEChips();
     updateSecurityButtonBadge(findings || []);
     // If the Security modal is already open for this host, re-render it too.
     const secList = document.getElementById('cve-list');
     if (secList && secList.dataset.host === host && secList.dataset.loaded === '1') {
-      renderCVEList(findings || []);
+      renderCVEList(findings || [], window.__cveScanStatus || []);
     }
   } catch (_) { /* best-effort */ }
+}
+
+async function loadCVEScanStatus(host) {
+  try {
+    const res = await fetch(API + '?action=cve_scan_status&host=' + encodeURIComponent(host), { credentials: 'same-origin' });
+    if (!res.ok) return [];
+    return await res.json() || [];
+  } catch (_) {
+    return [];
+  }
 }
 
 function openSecurityModal() {
@@ -1910,7 +1969,7 @@ function openSecurityModal() {
   const wrap = document.getElementById('cve-list');
   wrap.dataset.host = host;
   wrap.dataset.loaded = '1';
-  renderCVEList(window.__cveFindings || []);
+  renderCVEList(window.__cveFindings || [], window.__cveScanStatus || []);
   secModal.classList.add('is-open');
   document.body.style.overflow = 'hidden';
 }
@@ -1997,11 +2056,36 @@ function sevChip(s) {
   return '<span class="chip ' + cls + '">' + escapeHTML(u) + '</span>';
 }
 
-function renderCVEList(findings) {
+function renderCVECoverage(statuses) {
+  statuses = statuses || [];
+  if (!statuses.length) return '';
+  const scanned = statuses.filter(s => s.status === 'scanned').length;
+  const error = statuses.filter(s => s.status === 'error').length;
+  const notScanned = statuses.filter(s => s.status === 'not_scanned').length;
+  const issues = statuses.filter(s => s.status === 'error' || s.status === 'not_scanned').slice(0, 10);
+  let html = '<div class="card-empty" style="margin-bottom:12px;text-align:left">';
+  html += '<strong>Scan coverage:</strong> ' + scanned + ' scanned';
+  if (notScanned) html += ' · ' + notScanned + ' not scanned';
+  if (error) html += ' · ' + error + ' errors';
+  if (issues.length) {
+    html += '<div style="margin-top:8px">';
+    for (const s of issues) {
+      const why = s.error || s.mapping_reason || 'no detail';
+      html += '<div><span class="mono">' + escapeHTML(s.package_id || '') + '</span> '
+           + '<span class="sub">' + escapeHTML(s.version || '') + ' - ' + escapeHTML(why) + '</span></div>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderCVEList(findings, statuses) {
   const wrap = document.getElementById('cve-list');
   if (!wrap) return;
+  const coverage = renderCVECoverage(statuses || []);
   if (!findings.length) {
-    wrap.innerHTML = '<div class="card-empty">No known CVEs for this host. Either the scanner has not run yet, or all installed packages are clean.</div>';
+    wrap.innerHTML = coverage + '<div class="card-empty">No known CVEs for this host. Either the scanner has not run yet, or all installed packages are clean.</div>';
     return;
   }
   // Sort: KEV first, then CRITICAL → HIGH → MEDIUM → LOW → UNKNOWN, then CVSS desc.
@@ -2026,7 +2110,10 @@ function renderCVEList(findings) {
       : '<span class="mono" style="font-size:12px">' + escapeHTML(f.cve_id) + '</span>';
     html += '<div class="cve-row" data-cve-row="1" data-cve="' + escapeHTML(f.cve_id.toLowerCase()) + '" data-pkg="' + escapeHTML((f.package_id || '').toLowerCase()) + '">';
     html += '<div>' + link + (f.kev ? '<div style="margin-top:4px"><span class="chip danger" title="CISA Known Exploited Vulnerability">KEV</span></div>' : '') + '</div>';
-    html += '<div>' + sevChip(f.severity) + (f.cvss ? '<div class="sub mono" style="margin-top:4px">' + f.cvss.toFixed(1) + '</div>' : '') + '</div>';
+    html += '<div>' + sevChip(f.severity)
+         + (f.cvss ? '<div class="sub mono" style="margin-top:4px">CVSS ' + f.cvss.toFixed(1) + '</div>' : '')
+         + (f.epss ? '<div class="sub mono" style="margin-top:2px">EPSS ' + Math.round(f.epss * 100) + '%</div>' : '')
+         + '</div>';
     html += '<div><strong>' + escapeHTML(f.package_name || f.package_id) + '</strong><div class="pkg-id">' + escapeHTML(f.package_id) + '</div></div>';
     html += '<div class="mono sub">' + escapeHTML(f.version || '') + '</div>';
     html += '<div class="mono sub">' + escapeHTML(f.fixed_version || '—') + '</div>';
@@ -2034,7 +2121,7 @@ function renderCVEList(findings) {
     html += '</div>';
   }
   html += '</div>';
-  wrap.innerHTML = html;
+  wrap.innerHTML = coverage + html;
 }
 
 function applyCVEFilter(e) {
@@ -2404,9 +2491,17 @@ function handleWsEvent(ev) {
       setPkgRowStatus(ev.data.package_id, ev.data.status, { flash: ev.data.status === 'completed' || ev.data.status === 'failed' || ev.data.status === 'timeout' });
       const detail = ev.data.package_name || ev.data.package_id;
       appendLogLine({
+        hostname: ev.data.hostname,
         ts: new Date().toLocaleTimeString(),
         line: 'task progress: ' + detail + ' -> ' + ev.data.status + (ev.data.result ? (' (' + ev.data.result + ')') : '')
       });
+    }
+  } else if (ev.type === 'task_snapshot' && ev.data) {
+    const modalTitle = document.getElementById('device-modal-title');
+    const open = modal.classList.contains('is-open') && modalTitle && modalTitle.textContent === ev.data.hostname;
+    if (open) {
+      appendSnapshotLogTail(ev.data.hostname, ev.data.log_tail || []);
+      applySnapshotTaskState(ev.data);
     }
   } else if (ev.type === 'pc_online' && ev.data) {
     updateOnlinePill(ev.data.hostname, !!ev.data.online);
@@ -2431,7 +2526,7 @@ function handleWsEvent(ev) {
     const cveWrap = document.getElementById('cve-list');
     if (cveWrap && cveWrap.dataset.loaded === '1') {
       cveWrap.dataset.loaded = '0';
-      loadCVEFindings();
+      prefetchCVEForCurrentHost();
     }
     toast('CVE scan refreshed', 'ok');
   }
@@ -2625,19 +2720,59 @@ function updateOnlinePill(host, online) {
   }
 }
 
+const liveLogKeys = new Set();
 function appendLogLine(data) {
   // Only render log frames for the host whose modal is currently open.
   const log = document.getElementById('live-log');
   if (!log) return;
   if (log.dataset.host !== data.hostname) return;
+  const key = String(data.ts || '') + '|' + String(data.line || '');
+  if (liveLogKeys.has(key)) return;
+  liveLogKeys.add(key);
   const line = document.createElement('span');
   line.className = 'log-line';
   line.innerHTML = '<span class="log-ts">' + escapeHTML(data.ts || '') + '</span>' + escapeHTML(data.line || '');
+  line.dataset.logKey = key;
   log.appendChild(line);
   // Cap at ~1000 lines to avoid memory bloat.
-  while (log.childElementCount > 1000) log.removeChild(log.firstChild);
+  while (log.childElementCount > 1000) {
+    const first = log.firstChild;
+    if (first) liveLogKeys.delete(first.dataset.logKey || '');
+    log.removeChild(first);
+  }
   // Auto-scroll to bottom.
   log.scrollTop = log.scrollHeight;
+}
+
+function appendSnapshotLogTail(hostname, lines) {
+  if (!Array.isArray(lines)) return;
+  for (const raw of lines) {
+    const s = String(raw || '');
+    const m = s.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*(.*)$/);
+    appendLogLine({
+      hostname,
+      ts: m ? m[1] : '',
+      line: m ? m[2] : s,
+    });
+  }
+}
+
+function applySnapshotTaskState(snapshot) {
+  if (snapshot.active_task) applySnapshotTask(snapshot.active_task, 'running');
+  for (const t of (snapshot.queued_tasks || [])) applySnapshotTask(t, 'pending');
+}
+
+function applySnapshotTask(t, status) {
+  if (!t) return;
+  if (t.type === 'upgrade_all') {
+    setAllUpgradeState(status);
+  } else if (t.type === 'windows_update_all') {
+    setWUAllState(status);
+  } else if (t.type === 'windows_update_single' && t.package_id) {
+    setWURowStatus(t.package_id, status);
+  } else if (t.package_id) {
+    setPkgRowStatus(t.package_id, status);
+  }
 }
 
 // Map a task status to the chip HTML shown next to each package row.
@@ -2683,6 +2818,7 @@ function setPkgRowStatus(pid, status, opts) {
     btn.disabled = locked;
     btn.textContent = locked ? '…' : 'Upgrade';
   }
+  if (btn && status === 'running') btn.textContent = '...';
   if (opts && opts.flash) {
     row.animate(
       [{ background: '#DBEAFE' }, { background: getComputedStyle(row).backgroundColor }],
@@ -2699,6 +2835,7 @@ function setAllUpgradeState(status) {
     btn.disabled = running;
     btn.textContent = status === 'pending' ? 'Upgrading all…' : status === 'delivered' ? 'Running…' : 'Upgrade all';
   }
+  if (btn && status === 'running') btn.textContent = 'Running...';
   if (!running) return;
   // Paint every pkg row with the same status until a fresh pc update arrives.
   document.querySelectorAll('label.pkg[data-pkg-row]').forEach(row => {
@@ -2713,12 +2850,15 @@ function setWURowStatus(id, status, opts) {
   const chip = row.querySelector('[data-wu-status]');
   if (chip) chip.innerHTML = pkgStatusChip(status);
   row.classList.toggle('is-running', status === 'pending' || status === 'delivered');
+  if (status === 'running') row.classList.add('is-running');
   const btn = row.querySelector('button[data-action="wu-install-one"]');
   if (btn) {
     const locked = status === 'pending' || status === 'delivered';
     btn.disabled = locked;
+    if (status === 'running') btn.disabled = true;
     btn.textContent = locked ? '…' : 'Install';
   }
+  if (btn && status === 'running') btn.textContent = '...';
   if (opts && opts.flash) {
     row.animate([{ background: '#DBEAFE' }, { background: getComputedStyle(row).backgroundColor }],
       { duration: 900, easing: 'ease-out' });
@@ -3123,6 +3263,11 @@ document.getElementById('save-settings-btn')?.addEventListener('click', async ()
     full_scan_interval_hours: document.getElementById('s-scan').value,
     winget_package_timeout_minutes: document.getElementById('s-winget-timeout').value,
     service_name: document.getElementById('s-svc').value,
+    cve_source_nvd: document.getElementById('cve-src-nvd')?.checked ? 'true' : 'false',
+    cve_source_osv: document.getElementById('cve-src-osv')?.checked ? 'true' : 'false',
+    cve_source_github: document.getElementById('cve-src-github')?.checked ? 'true' : 'false',
+    cve_source_epss: document.getElementById('cve-src-epss')?.checked ? 'true' : 'false',
+    cve_min_mapping_confidence: document.getElementById('cve-min-confidence')?.value || 'high',
   };
   try {
     const res = await fetch(API + '?action=set_settings', {
@@ -3150,6 +3295,30 @@ const regscanDefaults = {
 function truthy(v) {
   const s = String(v ?? '').toLowerCase().trim();
   return s === '1' || s === 'true' || s === 'yes' || s === 'on';
+}
+
+const cveSettingDefaults = {
+  cve_source_nvd: 'true',
+  cve_source_osv: 'true',
+  cve_source_github: 'true',
+  cve_source_epss: 'true',
+  cve_min_mapping_confidence: 'high',
+};
+
+async function loadCVESettings() {
+  const nvd = document.getElementById('cve-src-nvd');
+  if (!nvd) return;
+  try {
+    const res = await fetch(API + '?action=get_settings', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const s = await res.json();
+    const pick = (k) => s[k] ?? cveSettingDefaults[k];
+    nvd.checked = truthy(pick('cve_source_nvd'));
+    document.getElementById('cve-src-osv').checked = truthy(pick('cve_source_osv'));
+    document.getElementById('cve-src-github').checked = truthy(pick('cve_source_github'));
+    document.getElementById('cve-src-epss').checked = truthy(pick('cve_source_epss'));
+    document.getElementById('cve-min-confidence').value = pick('cve_min_mapping_confidence') || 'high';
+  } catch (_) { /* best-effort */ }
 }
 
 async function loadRegscanSettings() {
@@ -3182,10 +3351,11 @@ async function loadRegscanSettings() {
 // Load once the Settings tab becomes active.
 document.addEventListener('click', e => {
   const t = e.target.closest('.tab');
-  if (t && t.dataset.tab === 'settings') loadRegscanSettings();
+  if (t && t.dataset.tab === 'settings') { loadRegscanSettings(); loadCVESettings(); }
 });
 // Also load on page ready in case the deep-link lands on Settings.
 loadRegscanSettings();
+loadCVESettings();
 
 document.getElementById('reset-regscan-btn')?.addEventListener('click', () => {
   document.getElementById('rs-skip-sys').checked        = truthy(regscanDefaults.reg_scan_skip_system_components);

@@ -501,17 +501,34 @@ func runWingetMonitored(ctx context.Context, wg string, args []string, timeout, 
 			logf("still running after %s; %s", time.Since(start).Round(time.Second), msg)
 			out.AppendLine("[corrivex] " + msg)
 			killProcessTree(cmd.Process.Pid)
-			<-waitCh
-			<-doneRead
+			waitForProcessCleanup(waitCh, doneRead, 1500*time.Millisecond)
 			return out.String(), TimeoutExitCode
 		case <-ctx.Done():
 			out.AppendLine("[corrivex] canceled")
 			killProcessTree(cmd.Process.Pid)
-			<-waitCh
-			<-doneRead
+			waitForProcessCleanup(waitCh, doneRead, 1500*time.Millisecond)
 			return out.String(), -1
 		case <-ticker.C:
 			logf("still running after %s (timeout %s)", time.Since(start).Round(time.Second), timeout.Round(time.Second))
+		}
+	}
+}
+
+func waitForProcessCleanup(waitCh <-chan error, doneRead <-chan struct{}, grace time.Duration) {
+	if grace <= 0 {
+		grace = time.Second
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	waitDone, readDone := false, false
+	for !(waitDone && readDone) {
+		select {
+		case <-waitCh:
+			waitDone = true
+		case <-doneRead:
+			readDone = true
+		case <-timer.C:
+			return
 		}
 	}
 }

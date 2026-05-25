@@ -154,6 +154,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.requireRoleReq(w, r, user, auth.RoleOperator, s.removeDevice)
 	case method == "POST" && action == "create_task":
 		s.requireRoleReq(w, r, user, auth.RoleOperator, s.createTask)
+	case method == "POST" && action == "sync_host":
+		s.requireRoleReq(w, r, user, auth.RoleOperator, s.syncHost)
 	case method == "POST" && action == "add_domain":
 		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.addDomain)
 	case method == "POST" && action == "remove_domain":
@@ -176,6 +178,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.softwareHistory(w, r)
 	case method == "GET" && action == "cve_findings":
 		s.cveFindings(w, r)
+	case method == "GET" && action == "cve_scan_status":
+		s.cveScanStatus(w, r)
 	case method == "GET" && action == "cve_summary":
 		s.cveSummary(w, r)
 	case method == "POST" && action == "rescan_cves":
@@ -325,6 +329,11 @@ func (s *Server) setSettings(w http.ResponseWriter, r *http.Request) {
 		"winget_package_timeout_minutes": true,
 		"install_service":                true,
 		"service_name":                   true,
+		"cve_source_nvd":                 true,
+		"cve_source_osv":                 true,
+		"cve_source_github":              true,
+		"cve_source_epss":                true,
+		"cve_min_mapping_confidence":     true,
 	}
 	for k, v := range body {
 		if !allowed[k] {
@@ -976,6 +985,22 @@ func (s *Server) handleAgentFrame(hostname string, data []byte, r *http.Request)
 			"result":          body.Result,
 			"elapsed_seconds": body.ElapsedSeconds,
 		})
+	case "task_snapshot":
+		var body struct {
+			RequestID   string    `json:"request_id"`
+			Hostname    string    `json:"hostname"`
+			ActiveTask  *db.Task  `json:"active_task"`
+			QueuedTasks []db.Task `json:"queued_tasks"`
+			LogTail     []string  `json:"log_tail"`
+			Timestamp   string    `json:"timestamp"`
+		}
+		if err := json.Unmarshal(data, &body); err != nil {
+			return
+		}
+		if body.Hostname == "" {
+			body.Hostname = hostname
+		}
+		s.handleTaskSnapshot(body.RequestID, s.normalizeHost(body.Hostname), body.ActiveTask, body.QueuedTasks, body.LogTail, body.Timestamp)
 	case "log":
 		var body struct {
 			Line  string `json:"line"`
@@ -991,6 +1016,60 @@ func (s *Server) handleAgentFrame(hostname string, data []byte, r *http.Request)
 			"line":     body.Line,
 		})
 	}
+}
+
+func (s *Server) handleTaskSnapshot(requestID, hostname string, active *db.Task, queued []db.Task, logTail []string, timestamp string) {
+	keep := map[int64]bool{}
+	if active != nil && active.ID != 0 {
+		keep[active.ID] = true
+	}
+	for _, t := range queued {
+		if t.ID != 0 {
+			keep[t.ID] = true
+		}
+	}
+
+	const result = "interrupted: agent reports task is not active after reconnect"
+	if s.DB != nil {
+		if failed, err := s.DB.FailDeliveredTasksNotInSnapshot(hostname, keep, result); err == nil {
+			for _, t := range failed {
+				s.publishTaskState(hostname, t, "failed", result)
+			}
+			if len(failed) > 0 {
+				s.publishPC(hostname)
+			}
+		}
+	}
+	if s.Broker != nil {
+		s.Broker.Publish("task_snapshot", map[string]any{
+			"request_id":   requestID,
+			"hostname":     hostname,
+			"active_task":  active,
+			"queued_tasks": queued,
+			"log_tail":     logTail,
+			"timestamp":    timestamp,
+		})
+	}
+}
+
+func (s *Server) publishTaskState(hostname string, t db.Task, status, result string) {
+	if s.Broker == nil {
+		return
+	}
+	evt := map[string]any{
+		"task_id":  t.ID,
+		"hostname": hostname,
+		"type":     t.Type,
+		"status":   status,
+		"result":   result,
+	}
+	if t.PackageID != nil {
+		evt["package_id"] = *t.PackageID
+	}
+	if t.PackageName != nil {
+		evt["package_name"] = *t.PackageName
+	}
+	s.Broker.Publish("task", evt)
 }
 
 func strPtr(p *string) string {
@@ -1129,6 +1208,40 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"status": "ok", "task_id": id})
 }
 
+func (s *Server) syncHost(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Hostname string `json:"hostname"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "Bad json"})
+		return
+	}
+	hostname := s.normalizeHost(body.Hostname)
+	if hostname == "" {
+		writeJSON(w, 400, map[string]string{"error": "Missing hostname"})
+		return
+	}
+	if s.Hub == nil || !s.Hub.IsOnline(hostname) {
+		writeJSON(w, 200, map[string]string{"status": "offline"})
+		return
+	}
+	frame := map[string]any{
+		"type":             "task_status_request",
+		"request_id":       randomToken(),
+		"include_log_tail": true,
+	}
+	raw, err := json.Marshal(frame)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if !s.Hub.Send(hostname, raw) {
+		writeJSON(w, 200, map[string]string{"status": "offline"})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "requested"})
+}
+
 // pushTaskIfOnline sends the task payload to the connected agent right away.
 // On success it also marks the task delivered server-side so subsequent
 // refreshes see a coherent state.
@@ -1255,6 +1368,24 @@ func (s *Server) cveFindings(w http.ResponseWriter, r *http.Request) {
 	}
 	if rows == nil {
 		rows = []db.CVEHostFinding{}
+	}
+	writeJSON(w, 200, rows)
+}
+
+// cveScanStatus returns per-package scanner coverage diagnostics for a host.
+func (s *Server) cveScanStatus(w http.ResponseWriter, r *http.Request) {
+	host := s.normalizeHost(r.URL.Query().Get("host"))
+	if host == "" {
+		writeJSON(w, 400, map[string]string{"error": "missing host"})
+		return
+	}
+	rows, err := s.DB.CVEScanStatusForHost(host)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if rows == nil {
+		rows = []db.CVEScanStatus{}
 	}
 	writeJSON(w, 200, rows)
 }

@@ -113,16 +113,24 @@ func CVEFindings(rows []db.CVEHostFinding, format Format, scope string) (*Output
 		buf.Write(utf8BOM)
 		w := csv.NewWriter(&buf)
 		_ = w.Write([]string{"hostname", "package_id", "package_name", "version",
-			"cve_id", "severity", "cvss", "kev", "fixed_version", "published",
+			"cve_id", "severity", "cvss", "epss", "epss_percentile", "kev", "fixed_version", "published",
 			"source", "summary"})
 		for _, r := range rows {
 			cvss := ""
 			if r.CVSS > 0 {
 				cvss = strconv.FormatFloat(r.CVSS, 'f', 1, 64)
 			}
+			epss := ""
+			if r.EPSS > 0 {
+				epss = strconv.FormatFloat(r.EPSS, 'f', 4, 64)
+			}
+			epssPercentile := ""
+			if r.EPSSPercentile > 0 {
+				epssPercentile = strconv.FormatFloat(r.EPSSPercentile, 'f', 4, 64)
+			}
 			_ = w.Write([]string{
 				r.Hostname, r.PackageID, r.PackageName, r.Version,
-				r.CVEID, r.Severity, cvss, strconv.FormatBool(r.KEV),
+				r.CVEID, r.Severity, cvss, epss, epssPercentile, strconv.FormatBool(r.KEV),
 				r.FixedIn, r.Published, r.Source, r.Summary,
 			})
 		}

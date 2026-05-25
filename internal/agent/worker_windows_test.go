@@ -86,3 +86,48 @@ func TestParseWingetPackageTimeout(t *testing.T) {
 		t.Fatalf("invalid timeout=%s", got)
 	}
 }
+
+func TestTaskSnapshotTracksQueuedActiveAndLogTail(t *testing.T) {
+	r := New(Config{}, t.TempDir(), nil)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	r.runWingetTask = func(ctx context.Context, t TaskRequest, timeout time.Duration, logf func(string, ...any)) (string, int) {
+		close(started)
+		<-release
+		return "completed", 0
+	}
+	r.postMutationScan = func(int) {}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.startTaskWorker(ctx)
+	r.enqueueTask(TaskRequest{ID: 1, Type: "upgrade_package", PackageID: "A"})
+	r.enqueueTask(TaskRequest{ID: 2, Type: "upgrade_package", PackageID: "B"})
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first task did not start")
+	}
+	r.log("snapshot test line")
+
+	snap := r.taskSnapshot("req-1", true)
+	if snap.RequestID != "req-1" {
+		t.Fatalf("request id=%q", snap.RequestID)
+	}
+	if snap.ActiveTask == nil || snap.ActiveTask.ID != 1 {
+		t.Fatalf("active=%v want task 1", snap.ActiveTask)
+	}
+	if len(snap.QueuedTasks) != 1 || snap.QueuedTasks[0].ID != 2 {
+		t.Fatalf("queued=%v want task 2", snap.QueuedTasks)
+	}
+	if len(snap.LogTail) == 0 || !strings.Contains(snap.LogTail[len(snap.LogTail)-1], "snapshot test line") {
+		t.Fatalf("log tail=%v", snap.LogTail)
+	}
+
+	snapAgain := r.taskSnapshot("req-2", true)
+	if len(snapAgain.LogTail) == 0 || !strings.Contains(snapAgain.LogTail[len(snapAgain.LogTail)-1], "snapshot test line") {
+		t.Fatalf("second log tail=%v; want non-draining tail", snapAgain.LogTail)
+	}
+	close(release)
+	r.waitTaskQueueIdle(2 * time.Second)
+}
