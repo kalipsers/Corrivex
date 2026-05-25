@@ -227,6 +227,7 @@ var migrations = []struct {
 		`INSERT IGNORE INTO settings (key_name, value) VALUES
 			('check_interval_minutes',  '1'),
 			('full_scan_interval_hours','24'),
+			('winget_package_timeout_minutes','20'),
 			('install_service',         'true'),
 			('service_name',            'Corrivex Agent')`,
 	}},
@@ -334,6 +335,77 @@ var migrations = []struct {
 		`INSERT IGNORE INTO settings (key_name, value) VALUES
 			('vendor_version_enabled', 'true'),
 			('vendor_version_interval_hours', '6')`,
+	}},
+	{13, "Add full_scan task type for manual inventory refresh", []string{
+		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single','full_scan') NOT NULL DEFAULT 'check'`,
+	}},
+	{14, "Add chocolatey task types", []string{
+		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single','full_scan','choco_install','choco_upgrade','choco_upgrade_all','choco_uninstall') NOT NULL DEFAULT 'check'`,
+	}},
+	{15, "Local-installer catalog + local_install task type", []string{
+		`CREATE TABLE IF NOT EXISTS local_installers (
+			id INT NOT NULL AUTO_INCREMENT,
+			name VARCHAR(255) NOT NULL,
+			path VARCHAR(1000) NOT NULL,
+			framework_hint VARCHAR(40) NULL,
+			silent_args_override VARCHAR(500) NULL,
+			expected_exit_codes VARCHAR(120) NOT NULL DEFAULT '0,3010',
+			notes VARCHAR(1000) NULL,
+			created_by VARCHAR(100) NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_li_name (name)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single','full_scan','choco_install','choco_upgrade','choco_upgrade_all','choco_uninstall','local_install') NOT NULL DEFAULT 'check'`,
+		`INSERT IGNORE INTO settings (key_name, value) VALUES
+			('local_installer_allowed_prefixes', '')`,
+	}},
+	{16, "SMB credentials (AES-GCM encrypted)", []string{
+		`CREATE TABLE IF NOT EXISTS smb_credentials (
+			id INT NOT NULL AUTO_INCREMENT,
+			share_root VARCHAR(500) NOT NULL,
+			username VARCHAR(255) NOT NULL,
+			domain VARCHAR(255) NULL,
+			password_enc VARCHAR(500) NOT NULL,
+			notes VARCHAR(1000) NULL,
+			created_by VARCHAR(100) NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_smb_root (share_root)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	}},
+	{17, "CVE source controls, mapping cache, diagnostics", []string{
+		`CREATE TABLE IF NOT EXISTS cve_package_map (
+			package_id VARCHAR(255) NOT NULL,
+			cpe_vendor VARCHAR(255) NULL,
+			cpe_product VARCHAR(255) NULL,
+			cpe_name VARCHAR(600) NULL,
+			title VARCHAR(600) NULL,
+			confidence VARCHAR(20) NOT NULL DEFAULT 'none',
+			reason VARCHAR(1000) NULL,
+			source VARCHAR(40) NOT NULL DEFAULT 'nvd_cpe',
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			PRIMARY KEY (package_id),
+			KEY idx_cve_map_confidence (confidence)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`CREATE TABLE IF NOT EXISTS cve_scan_status (
+			package_id VARCHAR(255) NOT NULL,
+			version VARCHAR(200) NOT NULL,
+			status VARCHAR(40) NOT NULL,
+			sources VARCHAR(120) NULL,
+			mapping_confidence VARCHAR(20) NULL,
+			mapping_reason VARCHAR(1000) NULL,
+			error TEXT NULL,
+			scanned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (package_id, version),
+			KEY idx_cve_status_scanned (scanned_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`INSERT IGNORE INTO settings (key_name, value) VALUES
+			('cve_source_nvd', 'true'),
+			('cve_source_osv', 'true'),
+			('cve_source_github', 'true'),
+			('cve_source_epss', 'true'),
+			('cve_min_mapping_confidence', 'high')`,
 	}},
 }
 
@@ -466,6 +538,7 @@ var migrationsSQLite = []struct {
 		)`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('check_interval_minutes','1')`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('full_scan_interval_hours','24')`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('winget_package_timeout_minutes','20')`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('install_service','true')`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('service_name','Corrivex Agent')`,
 	}},
@@ -566,6 +639,139 @@ var migrationsSQLite = []struct {
 			('vendor_version_enabled', 'true'),
 			('vendor_version_interval_hours', '6')`,
 	}},
+	{13, "Add full_scan task type for manual inventory refresh", []string{
+		// SQLite can't ALTER a CHECK constraint — rebuild the table.
+		// Uses the documented 12-step recipe from sqlite.org, minimised
+		// for the case where no indexes or triggers depend on the old
+		// table. Keep the row order stable to preserve pending task FIFO.
+		`CREATE TABLE IF NOT EXISTS tasks_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL,
+			type TEXT NOT NULL DEFAULT 'check' CHECK (type IN (
+				'upgrade_all','upgrade_package','install_package','uninstall_package',
+				'check','uninstall_self','windows_update_all','windows_update_single',
+				'full_scan')),
+			package_id TEXT,
+			package_name TEXT,
+			package_version TEXT,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','delivered','completed','failed')),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			delivered_at DATETIME,
+			completed_at DATETIME,
+			result TEXT
+		)`,
+		`INSERT INTO tasks_new (id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result)
+		 SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result FROM tasks`,
+		`DROP TABLE tasks`,
+		`ALTER TABLE tasks_new RENAME TO tasks`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_host_status ON tasks(hostname, status)`,
+	}},
+	{14, "Add chocolatey task types", []string{
+		// Same table-rebuild dance as migration 13; SQLite cannot ALTER a CHECK.
+		`CREATE TABLE IF NOT EXISTS tasks_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL,
+			type TEXT NOT NULL DEFAULT 'check' CHECK (type IN (
+				'upgrade_all','upgrade_package','install_package','uninstall_package',
+				'check','uninstall_self','windows_update_all','windows_update_single',
+				'full_scan',
+				'choco_install','choco_upgrade','choco_upgrade_all','choco_uninstall')),
+			package_id TEXT,
+			package_name TEXT,
+			package_version TEXT,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','delivered','completed','failed')),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			delivered_at DATETIME,
+			completed_at DATETIME,
+			result TEXT
+		)`,
+		`INSERT INTO tasks_new (id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result)
+		 SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result FROM tasks`,
+		`DROP TABLE tasks`,
+		`ALTER TABLE tasks_new RENAME TO tasks`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_host_status ON tasks(hostname, status)`,
+	}},
+	{15, "Local-installer catalog + local_install task type", []string{
+		`CREATE TABLE IF NOT EXISTS local_installers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			path TEXT NOT NULL,
+			framework_hint TEXT,
+			silent_args_override TEXT,
+			expected_exit_codes TEXT NOT NULL DEFAULT '0,3010',
+			notes TEXT,
+			created_by TEXT,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS tasks_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL,
+			type TEXT NOT NULL DEFAULT 'check' CHECK (type IN (
+				'upgrade_all','upgrade_package','install_package','uninstall_package',
+				'check','uninstall_self','windows_update_all','windows_update_single',
+				'full_scan',
+				'choco_install','choco_upgrade','choco_upgrade_all','choco_uninstall',
+				'local_install')),
+			package_id TEXT,
+			package_name TEXT,
+			package_version TEXT,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','delivered','completed','failed')),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			delivered_at DATETIME,
+			completed_at DATETIME,
+			result TEXT
+		)`,
+		`INSERT INTO tasks_new (id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result)
+		 SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result FROM tasks`,
+		`DROP TABLE tasks`,
+		`ALTER TABLE tasks_new RENAME TO tasks`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_host_status ON tasks(hostname, status)`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES
+			('local_installer_allowed_prefixes', '')`,
+	}},
+	{16, "SMB credentials (AES-GCM encrypted)", []string{
+		`CREATE TABLE IF NOT EXISTS smb_credentials (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			share_root TEXT NOT NULL UNIQUE,
+			username TEXT NOT NULL,
+			domain TEXT,
+			password_enc TEXT NOT NULL,
+			notes TEXT,
+			created_by TEXT,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+	}},
+	{17, "CVE source controls, mapping cache, diagnostics", []string{
+		`CREATE TABLE IF NOT EXISTS cve_package_map (
+			package_id TEXT NOT NULL PRIMARY KEY,
+			cpe_vendor TEXT,
+			cpe_product TEXT,
+			cpe_name TEXT,
+			title TEXT,
+			confidence TEXT NOT NULL DEFAULT 'none',
+			reason TEXT,
+			source TEXT NOT NULL DEFAULT 'nvd_cpe',
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_cve_map_confidence ON cve_package_map(confidence)`,
+		`CREATE TABLE IF NOT EXISTS cve_scan_status (
+			package_id TEXT NOT NULL,
+			version TEXT NOT NULL,
+			status TEXT NOT NULL,
+			sources TEXT,
+			mapping_confidence TEXT,
+			mapping_reason TEXT,
+			error TEXT,
+			scanned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (package_id, version)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_cve_status_scanned ON cve_scan_status(scanned_at)`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('cve_source_nvd', 'true')`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('cve_source_osv', 'true')`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('cve_source_github', 'true')`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('cve_source_epss', 'true')`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('cve_min_mapping_confidence', 'high')`,
+	}},
 }
 
 type SchemaVersion struct {
@@ -658,17 +864,17 @@ func (d *DB) RemoveAllowedDomain(id int) error {
 // -- Tasks ------------------------------------------------------------------
 
 type Task struct {
-	ID             int64          `json:"id"`
-	Hostname       string         `json:"hostname"`
-	Type           string         `json:"type"`
-	PackageID      *string        `json:"package_id"`
-	PackageName    *string        `json:"package_name"`
-	PackageVersion *string        `json:"package_version"`
-	Status         string         `json:"status"`
-	CreatedAt      time.Time      `json:"created_at"`
-	DeliveredAt    *time.Time     `json:"delivered_at"`
-	CompletedAt    *time.Time     `json:"completed_at"`
-	Result         *string        `json:"result"`
+	ID             int64      `json:"id"`
+	Hostname       string     `json:"hostname"`
+	Type           string     `json:"type"`
+	PackageID      *string    `json:"package_id"`
+	PackageName    *string    `json:"package_name"`
+	PackageVersion *string    `json:"package_version"`
+	Status         string     `json:"status"`
+	CreatedAt      time.Time  `json:"created_at"`
+	DeliveredAt    *time.Time `json:"delivered_at"`
+	CompletedAt    *time.Time `json:"completed_at"`
+	Result         *string    `json:"result"`
 }
 
 func (d *DB) CreateTask(hostname, typ string, pkgID, pkgName, pkgVer *string) (int64, error) {
@@ -739,6 +945,52 @@ func (d *DB) CompleteTask(id int64, result string) error {
 func (d *DB) MarkTaskDelivered(id int64) error {
 	_, err := d.sql.Exec("UPDATE tasks SET status='delivered', delivered_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'", id)
 	return err
+}
+
+// FailDeliveredTasksNotInSnapshot marks delivered tasks as failed when the
+// agent reports they are neither active nor queued anymore.
+func (d *DB) FailDeliveredTasksNotInSnapshot(hostname string, keep map[int64]bool, result string) ([]Task, error) {
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(
+		"SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result FROM tasks WHERE hostname=? AND status='delivered' ORDER BY created_at",
+		hostname)
+	if err != nil {
+		return nil, err
+	}
+	var stale []Task
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.Hostname, &t.Type, &t.PackageID, &t.PackageName, &t.PackageVersion, &t.Status, &t.CreatedAt, &t.DeliveredAt, &t.CompletedAt, &t.Result); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if !keep[t.ID] {
+			stale = append(stale, t)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range stale {
+		if _, err := tx.Exec("UPDATE tasks SET status='failed', completed_at=CURRENT_TIMESTAMP, result=? WHERE id=? AND status='delivered'", result, stale[i].ID); err != nil {
+			return nil, err
+		}
+		stale[i].Status = "failed"
+		stale[i].Result = &result
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return stale, nil
 }
 
 func (d *DB) TasksForHost(hostname string, limit int) ([]Task, error) {
@@ -1177,13 +1429,16 @@ func (d *DB) PackageCacheSet(query string, results []byte) {
 
 // InstalledSoftware is the current snapshot row for one host+package pair.
 type InstalledSoftware struct {
-	Hostname    string    `json:"hostname"`
-	PackageID   string    `json:"id"`
-	PackageName string    `json:"name"`
-	Version     string    `json:"version"`
-	Source      string    `json:"source"`
-	FirstSeen   time.Time `json:"first_seen"`
-	LastSeen    time.Time `json:"last_seen"`
+	Hostname      string    `json:"hostname"`
+	PackageID     string    `json:"id"`
+	PackageName   string    `json:"name"`
+	Version       string    `json:"version"`
+	Source        string    `json:"source"`
+	FirstSeen     time.Time `json:"first_seen"`
+	LastSeen      time.Time `json:"last_seen"`
+	CascadeState  string    `json:"cascade_state,omitempty"`  // "winget" | "vendor_only" | "unmanaged" | "unknown"
+	VendorLatest  string    `json:"vendor_latest,omitempty"`  // vendor cache's latest_version for this package_id (if known)
+	VendorChannel string    `json:"vendor_channel,omitempty"` // "stable" | "esr" | "lts" | ...
 }
 
 // SoftwareHistory is one entry in the append-only audit log for a (host,
@@ -1290,12 +1545,39 @@ func (d *DB) SyncInstalledSoftware(hostname string, incoming []map[string]any) e
 	return tx.Commit()
 }
 
+// installedSoftwareSelect is the shared projection used by
+// InstalledSoftwareForHost and AllInstalledSoftware. It LEFT JOINs
+// against vendor_versions so the cascade_state can be derived on the fly
+// without a second query or persisted column — the CASE expression
+// works identically in MariaDB and SQLite.
+const installedSoftwareSelect = `
+SELECT
+	s.hostname,
+	s.package_id,
+	s.package_name,
+	s.version,
+	s.source,
+	s.first_seen,
+	s.last_seen,
+	CASE
+		WHEN v.package_key IS NOT NULL AND v.latest_version IS NOT NULL
+		     AND v.latest_version <> s.version THEN 'vendor_only'
+		WHEN v.package_key IS NOT NULL THEN 'winget'
+		WHEN s.source = 'registry' THEN 'unmanaged'
+		WHEN s.source IN ('winget','both') THEN 'winget'
+		ELSE 'unknown'
+	END AS cascade_state,
+	COALESCE(v.latest_version, ''),
+	COALESCE(v.channel, '')
+FROM installed_software s
+LEFT JOIN vendor_versions v ON v.package_key = LOWER(s.package_id)
+`
+
 // InstalledSoftwareForHost returns the current snapshot for hostname,
 // alphabetically sorted by name.
 func (d *DB) InstalledSoftwareForHost(hostname string) ([]InstalledSoftware, error) {
-	rows, err := d.sql.Query(
-		"SELECT hostname, package_id, package_name, version, source, first_seen, last_seen FROM installed_software WHERE hostname=? ORDER BY LOWER(package_name), package_id",
-		hostname)
+	q := installedSoftwareSelect + "WHERE s.hostname=? ORDER BY LOWER(s.package_name), s.package_id"
+	rows, err := d.sql.Query(q, hostname)
 	if err != nil {
 		return nil, err
 	}
@@ -1304,7 +1586,8 @@ func (d *DB) InstalledSoftwareForHost(hostname string) ([]InstalledSoftware, err
 	for rows.Next() {
 		var s InstalledSoftware
 		var pname, ver, src sql.NullString
-		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen); err != nil {
+		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen,
+			&s.CascadeState, &s.VendorLatest, &s.VendorChannel); err != nil {
 			return nil, err
 		}
 		s.PackageName = pname.String
@@ -1533,13 +1816,44 @@ func (d *DB) PurgeExpiredSessions() error {
 // CVEEntry is one vulnerability finding. Stored as part of the JSON blob in
 // cve_cache.cves_json so the scanner can diff by CVE id cheaply.
 type CVEEntry struct {
-	ID           string  `json:"id"`
-	Severity     string  `json:"severity,omitempty"` // "CRITICAL" / "HIGH" / "MEDIUM" / "LOW" / "UNKNOWN"
-	CVSS         float64 `json:"cvss,omitempty"`
-	Summary      string  `json:"summary,omitempty"`
-	FixedVersion string  `json:"fixed_version,omitempty"`
-	Published    string  `json:"published,omitempty"` // ISO date
-	Source       string  `json:"source,omitempty"`    // "osv" / "nvd"
+	ID             string  `json:"id"`
+	Severity       string  `json:"severity,omitempty"` // "CRITICAL" / "HIGH" / "MEDIUM" / "LOW" / "UNKNOWN"
+	CVSS           float64 `json:"cvss,omitempty"`
+	EPSS           float64 `json:"epss,omitempty"`
+	EPSSPercentile float64 `json:"epss_percentile,omitempty"`
+	Summary        string  `json:"summary,omitempty"`
+	FixedVersion   string  `json:"fixed_version,omitempty"`
+	Published      string  `json:"published,omitempty"` // ISO date
+	Source         string  `json:"source,omitempty"`    // "osv" / "nvd" / "github"
+}
+
+type CVEScanKey struct {
+	PackageID   string
+	PackageName string
+	Version     string
+}
+
+type CVEPackageMapping struct {
+	PackageID  string    `json:"package_id"`
+	CPEVendor  string    `json:"cpe_vendor,omitempty"`
+	CPEProduct string    `json:"cpe_product,omitempty"`
+	CPEName    string    `json:"cpe_name,omitempty"`
+	Title      string    `json:"title,omitempty"`
+	Confidence string    `json:"confidence"`
+	Reason     string    `json:"reason,omitempty"`
+	Source     string    `json:"source,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at,omitempty"`
+}
+
+type CVEScanStatus struct {
+	PackageID         string    `json:"package_id"`
+	Version           string    `json:"version"`
+	Status            string    `json:"status"`
+	Sources           string    `json:"sources,omitempty"`
+	MappingConfidence string    `json:"mapping_confidence,omitempty"`
+	MappingReason     string    `json:"mapping_reason,omitempty"`
+	Error             string    `json:"error,omitempty"`
+	ScannedAt         time.Time `json:"scanned_at,omitempty"`
 }
 
 // CVECacheEntry is one row of cve_cache, with CVEs already decoded.
@@ -1605,20 +1919,21 @@ func (d *DB) UpsertCVECache(pkgID, version, source string, cves []CVEEntry) erro
 // UniquePackageVersions returns every distinct (package_id, version) pair
 // currently seen in installed_software. Rows with blank pkg_id/version are
 // skipped — they can't be scanned.
-func (d *DB) UniquePackageVersions() ([]struct{ PackageID, Version string }, error) {
-	rows, err := d.sql.Query(`SELECT DISTINCT package_id, COALESCE(version,'') FROM installed_software
-	                          WHERE package_id<>'' AND version IS NOT NULL AND version<>''`)
+func (d *DB) UniquePackageVersions() ([]CVEScanKey, error) {
+	rows, err := d.sql.Query(`SELECT package_id, COALESCE(MAX(package_name),''), COALESCE(version,'') FROM installed_software
+	                          WHERE package_id<>'' AND version IS NOT NULL AND version<>''
+	                          GROUP BY package_id, version`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []struct{ PackageID, Version string }
+	var out []CVEScanKey
 	for rows.Next() {
-		var p, v string
-		if err := rows.Scan(&p, &v); err != nil {
+		var p, n, v string
+		if err := rows.Scan(&p, &n, &v); err != nil {
 			return nil, err
 		}
-		out = append(out, struct{ PackageID, Version string }{p, v})
+		out = append(out, CVEScanKey{PackageID: p, PackageName: n, Version: v})
 	}
 	return out, rows.Err()
 }
@@ -1626,7 +1941,7 @@ func (d *DB) UniquePackageVersions() ([]struct{ PackageID, Version string }, err
 // StaleCVECacheKeys returns (pkg_id, version) pairs that either have no
 // cache row or a row older than the given TTL. Used by the scanner to pick
 // its work queue.
-func (d *DB) StaleCVECacheKeys(ttl time.Duration) ([]struct{ PackageID, Version string }, error) {
+func (d *DB) StaleCVECacheKeys(ttl time.Duration) ([]CVEScanKey, error) {
 	all, err := d.UniquePackageVersions()
 	if err != nil {
 		return nil, err
@@ -1652,7 +1967,7 @@ func (d *DB) StaleCVECacheKeys(ttl time.Duration) ([]struct{ PackageID, Version 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	out := make([]struct{ PackageID, Version string }, 0, len(all))
+	out := make([]CVEScanKey, 0, len(all))
 	for _, k := range all {
 		if !fresh[k.PackageID+"\x00"+k.Version] {
 			out = append(out, k)
@@ -1661,21 +1976,111 @@ func (d *DB) StaleCVECacheKeys(ttl time.Duration) ([]struct{ PackageID, Version 
 	return out, nil
 }
 
+func (d *DB) GetCVEPackageMapping(packageID string) (*CVEPackageMapping, error) {
+	var m CVEPackageMapping
+	var vendor, product, cpeName, title, reason, source sql.NullString
+	err := d.sql.QueryRow(
+		"SELECT package_id, cpe_vendor, cpe_product, cpe_name, title, confidence, reason, source, updated_at FROM cve_package_map WHERE package_id=?",
+		packageID,
+	).Scan(&m.PackageID, &vendor, &product, &cpeName, &title, &m.Confidence, &reason, &source, &m.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	m.CPEVendor, m.CPEProduct, m.CPEName, m.Title = vendor.String, product.String, cpeName.String, title.String
+	m.Reason, m.Source = reason.String, source.String
+	return &m, nil
+}
+
+func (d *DB) UpsertCVEPackageMapping(m CVEPackageMapping) error {
+	q := `INSERT INTO cve_package_map (package_id, cpe_vendor, cpe_product, cpe_name, title, confidence, reason, source, updated_at)
+	      VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+	      ON DUPLICATE KEY UPDATE cpe_vendor=VALUES(cpe_vendor), cpe_product=VALUES(cpe_product),
+	        cpe_name=VALUES(cpe_name), title=VALUES(title), confidence=VALUES(confidence),
+	        reason=VALUES(reason), source=VALUES(source), updated_at=CURRENT_TIMESTAMP`
+	if d.driver == DriverSQLite {
+		q = `INSERT INTO cve_package_map (package_id, cpe_vendor, cpe_product, cpe_name, title, confidence, reason, source, updated_at)
+		     VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+		     ON CONFLICT(package_id) DO UPDATE SET cpe_vendor=excluded.cpe_vendor, cpe_product=excluded.cpe_product,
+		       cpe_name=excluded.cpe_name, title=excluded.title, confidence=excluded.confidence,
+		       reason=excluded.reason, source=excluded.source, updated_at=CURRENT_TIMESTAMP`
+	}
+	_, err := d.sql.Exec(q, m.PackageID, nullIfEmpty(m.CPEVendor), nullIfEmpty(m.CPEProduct), nullIfEmpty(m.CPEName),
+		nullIfEmpty(m.Title), firstNonEmptyDB(m.Confidence, "none"), nullIfEmpty(m.Reason), firstNonEmptyDB(m.Source, "nvd_cpe"))
+	return err
+}
+
+func (d *DB) UpsertCVEScanStatus(s CVEScanStatus) error {
+	q := `INSERT INTO cve_scan_status (package_id, version, status, sources, mapping_confidence, mapping_reason, error, scanned_at)
+	      VALUES (?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+	      ON DUPLICATE KEY UPDATE status=VALUES(status), sources=VALUES(sources),
+	        mapping_confidence=VALUES(mapping_confidence), mapping_reason=VALUES(mapping_reason),
+	        error=VALUES(error), scanned_at=CURRENT_TIMESTAMP`
+	if d.driver == DriverSQLite {
+		q = `INSERT INTO cve_scan_status (package_id, version, status, sources, mapping_confidence, mapping_reason, error, scanned_at)
+		     VALUES (?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+		     ON CONFLICT(package_id, version) DO UPDATE SET status=excluded.status, sources=excluded.sources,
+		       mapping_confidence=excluded.mapping_confidence, mapping_reason=excluded.mapping_reason,
+		       error=excluded.error, scanned_at=CURRENT_TIMESTAMP`
+	}
+	_, err := d.sql.Exec(q, s.PackageID, s.Version, s.Status, nullIfEmpty(s.Sources), nullIfEmpty(s.MappingConfidence), nullIfEmpty(s.MappingReason), nullIfEmpty(s.Error))
+	return err
+}
+
+func (d *DB) CVEScanStatusForHost(hostname string) ([]CVEScanStatus, error) {
+	q := "SELECT package_id, version, status, COALESCE(sources,''), COALESCE(mapping_confidence,''), COALESCE(mapping_reason,''), COALESCE(error,''), scanned_at FROM cve_scan_status"
+	args := []any{}
+	if hostname != "" {
+		q = `SELECT DISTINCT st.package_id, st.version, st.status, COALESCE(st.sources,''), COALESCE(st.mapping_confidence,''), COALESCE(st.mapping_reason,''), COALESCE(st.error,''), st.scanned_at
+		       FROM cve_scan_status st
+		       JOIN installed_software s ON s.package_id=st.package_id AND s.version=st.version
+		      WHERE s.hostname=?`
+		args = append(args, hostname)
+	}
+	rows, err := d.sql.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CVEScanStatus
+	for rows.Next() {
+		var s CVEScanStatus
+		if err := rows.Scan(&s.PackageID, &s.Version, &s.Status, &s.Sources, &s.MappingConfidence, &s.MappingReason, &s.Error, &s.ScannedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+func firstNonEmptyDB(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // CVEHostFinding is a per-host CVE row, joining installed_software × cve_cache
 // and enriched with the KEV flag.
 type CVEHostFinding struct {
-	Hostname    string  `json:"hostname"`
-	PackageID   string  `json:"package_id"`
-	PackageName string  `json:"package_name"`
-	Version     string  `json:"version"`
-	CVEID       string  `json:"cve_id"`
-	Severity    string  `json:"severity"`
-	CVSS        float64 `json:"cvss"`
-	Summary     string  `json:"summary"`
-	FixedIn     string  `json:"fixed_version,omitempty"`
-	Published   string  `json:"published,omitempty"`
-	Source      string  `json:"source,omitempty"`
-	KEV         bool    `json:"kev"`
+	Hostname       string  `json:"hostname"`
+	PackageID      string  `json:"package_id"`
+	PackageName    string  `json:"package_name"`
+	Version        string  `json:"version"`
+	CVEID          string  `json:"cve_id"`
+	Severity       string  `json:"severity"`
+	CVSS           float64 `json:"cvss"`
+	EPSS           float64 `json:"epss,omitempty"`
+	EPSSPercentile float64 `json:"epss_percentile,omitempty"`
+	Summary        string  `json:"summary"`
+	FixedIn        string  `json:"fixed_version,omitempty"`
+	Published      string  `json:"published,omitempty"`
+	Source         string  `json:"source,omitempty"`
+	KEV            bool    `json:"kev"`
 }
 
 // CVEFindingsForHost returns every CVE affecting the host's currently-
@@ -1712,18 +2117,20 @@ func (d *DB) CVEFindingsForHost(hostname string) ([]CVEHostFinding, error) {
 		}
 		for _, c := range cves {
 			out = append(out, CVEHostFinding{
-				Hostname:    host,
-				PackageID:   pid,
-				PackageName: pname,
-				Version:     ver,
-				CVEID:       c.ID,
-				Severity:    c.Severity,
-				CVSS:        c.CVSS,
-				Summary:     c.Summary,
-				FixedIn:     c.FixedVersion,
-				Published:   c.Published,
-				Source:      c.Source,
-				KEV:         kev[c.ID],
+				Hostname:       host,
+				PackageID:      pid,
+				PackageName:    pname,
+				Version:        ver,
+				CVEID:          c.ID,
+				Severity:       c.Severity,
+				CVSS:           c.CVSS,
+				EPSS:           c.EPSS,
+				EPSSPercentile: c.EPSSPercentile,
+				Summary:        c.Summary,
+				FixedIn:        c.FixedVersion,
+				Published:      c.Published,
+				Source:         c.Source,
+				KEV:            kev[c.ID],
 			})
 		}
 	}
@@ -1858,6 +2265,90 @@ func (d *DB) GetKEVSet() (map[string]bool, error) {
 	return out, rows.Err()
 }
 
+// -- Local installer catalog (1.7.1) --------------------------------------
+
+// LocalInstaller describes one admin-curated MSI/EXE staged on a local
+// path or UNC share. Stored in the local_installers table.
+type LocalInstaller struct {
+	ID                 int64     `json:"id"`
+	Name               string    `json:"name"`
+	Path               string    `json:"path"`
+	FrameworkHint      string    `json:"framework_hint,omitempty"`
+	SilentArgsOverride string    `json:"silent_args_override,omitempty"`
+	ExpectedExitCodes  string    `json:"expected_exit_codes"` // "0,3010"
+	Notes              string    `json:"notes,omitempty"`
+	CreatedBy          string    `json:"created_by,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+// ListLocalInstallers returns every row, sorted alphabetically by name.
+func (d *DB) ListLocalInstallers() ([]LocalInstaller, error) {
+	rows, err := d.sql.Query(
+		"SELECT id, name, path, COALESCE(framework_hint,''), COALESCE(silent_args_override,''), expected_exit_codes, COALESCE(notes,''), COALESCE(created_by,''), created_at FROM local_installers ORDER BY LOWER(name)")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LocalInstaller
+	for rows.Next() {
+		var li LocalInstaller
+		if err := rows.Scan(&li.ID, &li.Name, &li.Path, &li.FrameworkHint, &li.SilentArgsOverride,
+			&li.ExpectedExitCodes, &li.Notes, &li.CreatedBy, &li.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, li)
+	}
+	return out, rows.Err()
+}
+
+// GetLocalInstaller loads a single row by id.
+func (d *DB) GetLocalInstaller(id int64) (*LocalInstaller, error) {
+	row := d.sql.QueryRow(
+		"SELECT id, name, path, COALESCE(framework_hint,''), COALESCE(silent_args_override,''), expected_exit_codes, COALESCE(notes,''), COALESCE(created_by,''), created_at FROM local_installers WHERE id=?",
+		id)
+	var li LocalInstaller
+	if err := row.Scan(&li.ID, &li.Name, &li.Path, &li.FrameworkHint, &li.SilentArgsOverride,
+		&li.ExpectedExitCodes, &li.Notes, &li.CreatedBy, &li.CreatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &li, nil
+}
+
+// UpsertLocalInstaller inserts or updates by name. Returns the row id.
+func (d *DB) UpsertLocalInstaller(li LocalInstaller) (int64, error) {
+	// Check if a row with this name exists; update it if so, insert otherwise.
+	var existing int64
+	err := d.sql.QueryRow("SELECT id FROM local_installers WHERE name=?", li.Name).Scan(&existing)
+	if err == sql.ErrNoRows {
+		res, err := d.sql.Exec(
+			"INSERT INTO local_installers (name, path, framework_hint, silent_args_override, expected_exit_codes, notes, created_by) VALUES (?,?,?,?,?,?,?)",
+			li.Name, li.Path, nullIfEmpty(li.FrameworkHint), nullIfEmpty(li.SilentArgsOverride),
+			li.ExpectedExitCodes, nullIfEmpty(li.Notes), nullIfEmpty(li.CreatedBy))
+		if err != nil {
+			return 0, err
+		}
+		id, _ := res.LastInsertId()
+		return id, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	_, err = d.sql.Exec(
+		"UPDATE local_installers SET path=?, framework_hint=?, silent_args_override=?, expected_exit_codes=?, notes=? WHERE id=?",
+		li.Path, nullIfEmpty(li.FrameworkHint), nullIfEmpty(li.SilentArgsOverride),
+		li.ExpectedExitCodes, nullIfEmpty(li.Notes), existing)
+	return existing, err
+}
+
+// DeleteLocalInstaller removes one row by id.
+func (d *DB) DeleteLocalInstaller(id int64) error {
+	_, err := d.sql.Exec("DELETE FROM local_installers WHERE id=?", id)
+	return err
+}
+
 // -- Vendor version cache (1.6.1 cascade) ---------------------------------
 
 // VendorVersion is one row of the vendor_versions table.
@@ -1930,8 +2421,8 @@ func (d *DB) AllHostnames() ([]string, error) {
 // every host, alphabetically sorted by hostname then package name. Used by
 // the Reports tab for fleet-wide exports.
 func (d *DB) AllInstalledSoftware() ([]InstalledSoftware, error) {
-	rows, err := d.sql.Query(
-		"SELECT hostname, package_id, package_name, version, source, first_seen, last_seen FROM installed_software ORDER BY hostname, LOWER(package_name), package_id")
+	q := installedSoftwareSelect + "ORDER BY s.hostname, LOWER(s.package_name), s.package_id"
+	rows, err := d.sql.Query(q)
 	if err != nil {
 		return nil, err
 	}
@@ -1940,7 +2431,8 @@ func (d *DB) AllInstalledSoftware() ([]InstalledSoftware, error) {
 	for rows.Next() {
 		var s InstalledSoftware
 		var pname, ver, src sql.NullString
-		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen); err != nil {
+		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen,
+			&s.CascadeState, &s.VendorLatest, &s.VendorChannel); err != nil {
 			return nil, err
 		}
 		s.PackageName = pname.String
@@ -2058,18 +2550,20 @@ func (d *DB) AllCVEFindings() ([]CVEHostFinding, error) {
 		}
 		for _, c := range cves {
 			out = append(out, CVEHostFinding{
-				Hostname:    host,
-				PackageID:   pid,
-				PackageName: pname,
-				Version:     ver,
-				CVEID:       c.ID,
-				Severity:    c.Severity,
-				CVSS:        c.CVSS,
-				Summary:     c.Summary,
-				FixedIn:     c.FixedVersion,
-				Published:   c.Published,
-				Source:      c.Source,
-				KEV:         kev[c.ID],
+				Hostname:       host,
+				PackageID:      pid,
+				PackageName:    pname,
+				Version:        ver,
+				CVEID:          c.ID,
+				Severity:       c.Severity,
+				CVSS:           c.CVSS,
+				EPSS:           c.EPSS,
+				EPSSPercentile: c.EPSSPercentile,
+				Summary:        c.Summary,
+				FixedIn:        c.FixedVersion,
+				Published:      c.Published,
+				Source:         c.Source,
+				KEV:            kev[c.ID],
 			})
 		}
 	}
@@ -2078,10 +2572,10 @@ func (d *DB) AllCVEFindings() ([]CVEHostFinding, error) {
 
 // ReportSummary is the set of counters rendered in the Reports tab top cards.
 type ReportSummary struct {
-	Devices            int `json:"devices"`
-	InstalledPackages  int `json:"installed_packages"`
-	DistinctAdmins     int `json:"distinct_local_admins"`
-	OpenCVEs           int `json:"open_cves"`
+	Devices           int `json:"devices"`
+	InstalledPackages int `json:"installed_packages"`
+	DistinctAdmins    int `json:"distinct_local_admins"`
+	OpenCVEs          int `json:"open_cves"`
 }
 
 // ReportsSummary computes the four counters shown on the Reports tab.

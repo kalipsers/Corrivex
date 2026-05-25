@@ -55,6 +55,339 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.9.0 — Isolated winget package updates + task autohealing
+
+**Minor** — agent-side update execution is now bounded and observable.
+
+- Winget install / upgrade / uninstall operations now run as monitored child
+  processes with live stdout/stderr streaming to the dashboard log pane.
+- `upgrade_all` no longer calls `winget upgrade --all`. The agent refreshes
+  the pending-upgrade list, upgrades one package at a time, reports
+  per-package progress, and continues after a package fails or times out.
+- New setting `winget_package_timeout_minutes` (default `20`) controls how
+  long one winget package process may run before Corrivex kills the process
+  tree and moves on.
+- Agent task execution is serialized through one worker queue so multiple
+  dashboard clicks cannot start overlapping winget mutations on the same host.
+  The worker recovers from panics and logs heartbeat lines while a task is
+  active.
+- Agent WebSocket frames now include `task_progress` events for per-package
+  `running`, `completed`, `failed`, and `timeout` updates. The server fans
+  these out to the dashboard, which updates package rows and appends progress
+  lines without waiting for the final post-task rescan.
+
+### 1.8.0 — Remove chocolatey integration
+
+**Minor** — feature removal. Chocolatey support (1.7.0 / 1.7.3 / 1.7.4,
+all local-dev only, never publicly released) was ripped out because in
+practice the bootstrap and silent-install flows weren't reliable enough
+on the test fleet. Local-file installers (1.7.1) and SMB credentials
+(1.7.2) remain — those are the viable long-tail-install paths.
+
+- `internal/choco` package deleted entirely.
+- Agent `RunTasks` switch drops the four `choco_*` cases. The agent
+  no longer calls `choco.exe` for any task, and the full-scan merge
+  no longer reads `choco list` / `choco outdated`.
+- `internal/agent/regmerge.go` simplified — removed
+  `mergeChocolatey`, `chocoAutoinstallAllowed`, `stripChocoPrefix`.
+  `mergeSourceTags` stays because the registry merge still needs it.
+- Dashboard Upgrades tab reverts to "Winget" — no more source chips,
+  no more "Upgrade all (choco)" split button. Bulk-upgrade uses
+  `upgrade_package` for every selection unconditionally.
+- `createTask` validator drops the four `choco_*` task types;
+  `agent_config` stops returning `choco_autoinstall`.
+- DB enum values `choco_install`, `choco_upgrade`,
+  `choco_upgrade_all`, `choco_uninstall` are left in the
+  `tasks.type` MariaDB ENUM and SQLite CHECK constraint. They're
+  harmless orphans — no code path can create them anymore — and
+  removing them would force a schema-rebuild for no user-visible
+  benefit. The settings row `choco_autoinstall` is also left alone
+  (the UI never exposed a toggle and no code reads it).
+
+Go back to 1.7.2 if you want the last state *with* chocolatey —
+1.8.0 is the clean "chocolatey never happened" snapshot.
+
+### 1.7.4 — Proactive choco bootstrap + winget source-update fix
+
+**Patch**
+
+Two issues surfaced in a live agent log:
+
+1. `winget source update returned invalid_arguments (non-fatal)`
+   The 1.6.3 call passed `--accept-source-agreements
+   --disable-interactivity` to the source subcommand. Neither flag
+   is accepted by `winget source update` (they belong on
+   install/upgrade). The source refresh still happened silently on
+   exit 0 but older winget builds returned exit -1978335230
+   ("invalid arguments") without doing anything. Stripped the flags;
+   the call is now just `winget source update`.
+
+2. **No choco scan on hosts without chocolatey.** 1.7.0 promised
+   that the agent would bootstrap chocolatey on hosts that don't
+   have it (mirroring EnsureWinget), but I only wired EnsureChoco
+   inside the choco_* task handlers — the full-scan merge path
+   silently bailed when `choco.IsInstalled()` returned false, which
+   is every clean Windows host. Users saw no choco log lines and
+   thought the scan was broken.
+   Fix: `mergeChocolatey` now runs EnsureChoco proactively on the
+   first scan per agent install, gated by the new server setting
+   `choco_autoinstall` (default `true`). Air-gapped fleets can set
+   it to `false` to keep the agent from reaching
+   `community.chocolatey.org/install.ps1`.
+   The merge function also logs one line in every branch now —
+   "not installed, autoinstall disabled", "running EnsureChoco
+   bootstrap", "bootstrap failed: …", or "choco merge: +X new, Y
+   confirmed" — so the log stream clearly shows the path taken.
+
+`choco_autoinstall` is exposed through the existing `agent_config`
+endpoint; admins who want to flip it can use `set_settings` until a
+dedicated UI toggle lands in 1.7.5.
+
+### 1.7.3 — Upgrade tab is source-aware (winget + chocolatey)
+
+**Patch**
+
+The 1.7.0 chocolatey plumbing wired choco packages into the agent
+report and created the `choco_*` task types, but the dashboard's
+Upgrade tab (historically the "Winget" tab) rendered every pending
+upgrade as a winget row. Clicking **Upgrade** on a chocolatey row
+sent `upgrade_package` which winget promptly rejected (it doesn't
+know about `choco:<id>` identifiers).
+
+- Device-modal "Winget" tab is now labelled **Upgrades** and shows a
+  small source chip next to each package name: `winget` (blue),
+  `chocolatey` (teal). Rows from both sources appear in a single
+  list so admins see the full "what's out of date" picture.
+- Per-row Upgrade button dispatches the correct task type:
+  - `id` prefix `choco:` → `choco_upgrade`
+  - otherwise → `upgrade_package` (winget, unchanged)
+- **Upgrade all** now splits into two buttons when both sources have
+  pending work:
+  - **Upgrade all (winget)** → `upgrade_all` task
+  - **Upgrade all (choco)** → `choco_upgrade_all` task
+  When only one source has rows, only that button shows.
+- Refresh inventory (full_scan) button unchanged — refreshes both
+  inventories since the agent's post-task rescan always runs
+  winget + choco + registry.
+
+### 1.7.2 — SMB credentials for network-share installer sources
+
+**Minor** — lets agents authenticate against SMB/CIFS file shares
+before reading local_install installers from them. Complements 1.7.1:
+now admins can point `local_installers.path` at a share even when the
+agent's SYSTEM account has no inherent rights on it.
+
+- Schema migration 16: new `smb_credentials` table.
+  - `share_root` — the top-level UNC prefix this credential applies
+    to, e.g. `\\fileserver\installers`. A longest-prefix match at
+    runtime picks the right credential for a given installer path.
+  - `username`, `domain` — plain text.
+  - `password_enc` — AES-GCM ciphertext (nonce prepended). Base64 in
+    the column to stay bytes-safe across MariaDB/SQLite.
+  - `notes`, `created_by`, `created_at`.
+  - Server-side encryption key: `CORRIVEX_SMB_KEY` env var; when
+    unset the server generates a 32-byte key on first boot and
+    persists it in a new `smb_key` settings row so restarts don't
+    lose decryption capability. The key is never exposed through any
+    API — password fields are write-only.
+- Admin-gated CRUD:
+  - `list_smb_credentials` — returns every row minus the password.
+  - `save_smb_credential` — upserts by share_root; accepts password
+    plaintext, stores ciphertext, returns row id.
+  - `delete_smb_credential` — by id.
+- Agent-facing TOFU-auth endpoint `agent_smb_creds` — takes the
+  installer path and returns the matching decrypted credential (if
+  any) as `{username, domain, password, share_root}`. Password only
+  flows to the agent; never returned on the admin list. Requests
+  from IPs without an agent token fail.
+- Agent hook in `local_install`: before running localinstall.Run,
+  if the path starts with `\\`, the agent calls `agent_smb_creds`
+  and — when a credential matches — runs
+    `net use <share_root> /user:DOMAIN\user PW /persistent:no`
+  in a hidden cmd, does the install, then
+    `net use <share_root> /delete`
+  as a best-effort teardown. Password is redacted from the agent
+  log stream; only the share root + username are logged.
+- Settings tab grows a "Network shares" card parallel to "Local
+  installers": table + add/edit modal with write-only password field
+  (placeholder "keep current" when editing an existing row so admins
+  don't accidentally blank it out).
+
+Security note: AES-GCM with a per-install key gets password storage
+off the "plaintext in DB" level. The weakest remaining link is the
+server filesystem — anyone who roots the server host can read the
+key and decrypt any stored password. Compromised admins can still
+exfiltrate via the agent (the agent legitimately receives the
+plaintext). This is the same trust model as Windows credential
+manager; documented but not magically fixed.
+
+### 1.7.1 — Local-file installer with framework detection
+
+**Minor** — new admin-curated install path that works for anything
+winget and Chocolatey don't cover: MSIs and EXEs staged on a local
+disk path or UNC share. Agent reads the file header, identifies the
+installer framework (InnoSetup / NSIS / MSI / Squirrel / WiX Burn /
+InstallShield / Advanced Installer), and runs the matching silent
+flag set. Admins can override per-installer when a vendor used a
+non-standard packaging.
+
+- New `internal/localinstall` package:
+  - `Detect(path)` → inspects the PE header + string table to
+    identify the installer framework. MSI is recognised by extension
+    alone. Returns a Framework enum + the canonical silent args.
+  - `Run(path, argsOverride, expectedCodes)` → shell-outs with the
+    right silent args, waits for completion, returns combined output
+    + exit code.
+- Frameworks covered with built-in silent-arg templates:
+  | Framework | Flags |
+  |---|---|
+  | `msi` | `msiexec /i <path> /qn /norestart` |
+  | `inno` | `<path> /VERYSILENT /SUPPRESSMSGBOXES /NORESTART` |
+  | `nsis` | `<path> /S` |
+  | `wix_burn` | `<path> /quiet /norestart` |
+  | `squirrel` | `<path> --silent` |
+  | `installshield` | `<path> /s /v"/qn /norestart"` |
+  | `advanced_installer` | falls back to MSI flags (MSI is bundled) |
+  | `unknown` | refuses to run unless admin overrode the args |
+- Schema migration 15:
+  - New `local_installers` table: id, name, path (UNC or local),
+    framework_hint (optional), silent_args_override (optional),
+    expected_exit_codes (comma-separated ints; defaults to "0,3010"),
+    notes, created_at, created_by.
+  - `tasks.type` enum extended with `local_install`. SQLite
+    table-rebuild same pattern as 13 and 14.
+- New admin-gated API: CRUD under
+  `/api/?action=list_local_installers`,
+  `/api/?action=add_local_installer`,
+  `/api/?action=delete_local_installer`.
+- New task type `local_install` — payload field `package_id`
+  carries the `local_installers.id` as a string. Agent loads the
+  row via an existing `agent_config` variant call (not exposed in
+  a separate endpoint to keep the agent surface minimal), runs
+  `localinstall.Run`, reports exit code.
+- Settings → Local installers UI card with add / edit / delete, and
+  a device-modal action "Install local…" that enumerates the catalog
+  and queues the task.
+- Path-whitelist enforcement: path must start with a UNC share
+  (`\\server\share\...`) or one of the configured allowed prefixes
+  in the `local_installer_allowed_prefixes` setting (default empty,
+  so UNC-only until configured). No `C:\Windows\*`, no `%TEMP%\*`.
+
+No SMB authentication yet — 1.7.2 adds that. A 1.7.1 agent can
+already reach a UNC share if it already has an authenticated
+Windows session or if the share allows anonymous reads.
+
+### 1.7.0 — Chocolatey as a second package manager
+
+**Minor** — adds a full second package manager alongside winget, with
+no schema-breaking changes. Migration 14 extends the tasks.type enum
+only.
+
+The Chocolatey community repository has roughly 10× the package
+coverage of winget for Windows desktop software, with silent-install
+logic curated by each package's maintainer. Corrivex now uses choco
+wherever winget doesn't have a package.
+
+- New `internal/choco` package shelling out to `choco.exe`:
+  - `ListInstalled()` parses `choco list --local-only -r`
+  - `ListUpgrades()` parses `choco outdated -r`
+  - `RunInstall(id, version)`, `RunUpgrade(id)`, `RunUpgradeAll()`,
+    `RunUninstall(id)` wrap `choco install/upgrade/uninstall -y`
+    with `--no-progress` for cleaner log output.
+  - `EnsureChoco()` bootstraps Chocolatey on hosts that don't have
+    it via the official PowerShell install script (matching our
+    `EnsureWinget()` pattern). Runs once per agent install and again
+    if choco.exe goes missing.
+- Agent full scan now merges three inventories: winget →
+  chocolatey → registry. Package IDs from choco are namespaced
+  `choco:<id>` so they never collide with winget IDs. A package
+  found in multiple managers gets `source=winget+choco`,
+  `source=choco+registry`, etc.
+- Migration 14 — tasks.type enum extended with
+  `choco_install`, `choco_upgrade`, `choco_upgrade_all`,
+  `choco_uninstall`. SQLite rebuild via the 1.6.3 table-rename
+  pattern (CHECK constraints aren't alterable).
+- Agent's RunTasks switch adds the four choco cases. All four are
+  mutators → post-task rescan runs the now-standard
+  `winget source update` + fresh fullScanWS cycle (and the agent
+  will also `choco upgrade` refresh where relevant).
+
+Package ID schema reminder:
+  `winget`   — canonical winget ID (`Mozilla.Firefox`)
+  `choco:`   — prefixed chocolatey ID (`choco:firefox`)
+  `reg:`     — prefixed registry subkey name
+
+No dashboard-level UI breakage — the Winget tab still renders only
+winget-sourced rows (filtered by `source` containing "winget"),
+Installed Software tab shows all three. A full rework of the
+upgrade UI to expose chocolatey-initiated upgrades arrives in
+**1.7.3** once the base layer is shaken out.
+
+What's coming:
+- **1.7.1** — local-file installer with framework detection
+  (InnoSetup / NSIS / MSI / Squirrel / WiX Burn / InstallShield).
+- **1.7.2** — SMB credentials for network-share installer sources.
+
+### 1.6.3 — Clear already-updated winget rows
+
+**Patch** — fixes two causes of stale rows in the Winget tab.
+
+1. **Agent-side:** after an upgrade/install/uninstall task mutates the
+   package set, the agent now runs `winget source update` before
+   re-running `winget list --upgrade-available` in the post-task
+   `fullScanWS`. Without the source refresh, winget's local index can
+   still report the just-upgraded version as "pending" for a few
+   seconds — the row lingered on the dashboard until the next full
+   scan (24 h by default).
+2. **Manual refresh:** new `full_scan` task type. The Winget tab grows
+   a small **Refresh inventory** button next to "Upgrade all"; clicking
+   it enqueues a `full_scan` task that the agent processes by running
+   `fullScanWS` directly. Covers the case where an admin upgraded a
+   package outside Corrivex (local cmd, vendor installer) and wants
+   the dashboard reconciled without waiting 24 hours.
+
+No schema change. Existing tasks table already accepts the new type
+via the `upgrade_all | upgrade_package | install_package | uninstall_package |
+check | uninstall_self | windows_update_all | windows_update_single`
+ENUM — we extend that ENUM in a new migration #13 to include
+`full_scan`.
+
+### 1.6.2 — Agent consumes registry filters + cascade_state derivation
+
+**Patch** — closes two loops the 1.6.0 and 1.6.1 slices left half-wired.
+
+- **Filter settings actually apply.** New agent-facing endpoint
+  `GET /api/?action=agent_config` (TOFU token-authenticated) returns
+  the subset of server settings the agent needs: every
+  `reg_scan_*` key plus sensible defaults for anything unset. Agent
+  calls it at the start of every full scan and passes the result to
+  `regscan.FiltersFromSettings`. If the fetch fails, agent falls back
+  to `DefaultFilters` — same behaviour as 1.6.0.
+- **Cascade state populated.** During `SyncInstalledSoftware`, the
+  server now sets `installed_software.cascade_state` per row by
+  joining against `vendor_versions`:
+  - `winget` when `source in (winget, both)` and the vendor cache
+    has no matching package_key, or the installed version matches
+    the cached latest.
+  - `vendor_only` when the vendor cache has a matching key AND the
+    installed version is older than the cached latest.
+  - `unmanaged` when `source = registry` and no vendor cache
+    match — winget doesn't know the app and there's no
+    known automated update path.
+  - `unknown` otherwise.
+- Installed-software modal tab renders a coloured chip next to the
+  existing source label:
+  - `winget` → neutral grey
+  - `vendor_only` → amber ("out of date · vendor only")
+  - `unmanaged` → red ("unmanaged — manual update needed")
+- `GET /api/?action=installed_software` now returns
+  `cascade_state` per row.
+
+Next up (deferred to 1.7.0): actual cascade task dispatch — server
+picks the level per upgrade job instead of always invoking winget.
+That requires agent-side task-type changes (`upgrade_package_L3`,
+etc.) and is a minor bump.
+
 ### 1.6.1 — Update cascade: vendor version APIs + Unmanaged state
 
 **Minor** — adds new schema (migration 12), new task types, and a new

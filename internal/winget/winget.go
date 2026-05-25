@@ -5,12 +5,16 @@ package winget
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -23,6 +27,12 @@ type Package struct {
 	Available string `json:"available"`
 	Source    string `json:"source"`
 }
+
+// TimeoutExitCode is returned when Corrivex kills a winget child process after
+// the configured per-package timeout.
+const TimeoutExitCode = -9009
+
+const maxWingetOutputBytes = 64 * 1024
 
 // Find the winget.exe path. Returns empty if not found.
 func Find() string {
@@ -99,6 +109,8 @@ func ExitCodeResult(code int) string {
 		return "reboot_required"
 	case -1978334959: // 0x8A150111
 		return "package_agreements_not_accepted"
+	case TimeoutExitCode:
+		return "timeout_killed"
 
 	default:
 		// Unknown: if it's in the winget range, show hex so admins can
@@ -150,8 +162,9 @@ func ListInstalled() ([]Package, error) {
 // --accept-source-agreements     — blanket-accept repo terms
 // --accept-package-agreements    — blanket-accept per-package EULAs
 // --disable-interactivity        — fail fast rather than wait on stdin
-//                                   (added in winget 1.1; older builds
-//                                   ignore unknown flags with a warning)
+//
+//	(added in winget 1.1; older builds
+//	ignore unknown flags with a warning)
 var commonFlags = []string{
 	"--silent",
 	"--accept-source-agreements",
@@ -159,16 +172,20 @@ var commonFlags = []string{
 	"--disable-interactivity",
 }
 
-// SourceUpdate refreshes the local index and re-asserts blanket acceptance
-// of every configured source's agreement. Fire this before an install/upgrade
-// to dodge stale-source-agreement traps that otherwise trigger
-// APPINSTALLER_CLI_ERROR_PACKAGE_AGREEMENTS_NOT_ACCEPTED (0x8A150111).
+// SourceUpdate refreshes the local index for every configured winget
+// source. `winget source update` does NOT accept the install/upgrade
+// agreement flags — they return "invalid arguments" — so this call is
+// deliberately minimal. A source refresh still helps dodge stale
+// upgrade-availability data that winget would otherwise serve for
+// several seconds after an upgrade completed.
 func SourceUpdate() (string, int) {
 	wg := Find()
 	if wg == "" {
 		return "winget not found", -1
 	}
-	return runWinget2(wg, "source", "update", "--accept-source-agreements", "--disable-interactivity")
+	// `source update` takes only an optional --name; no flags that
+	// newer/older winget builds may not recognise.
+	return runWinget2(wg, "source", "update")
 }
 
 // RunUpgradeAll runs `winget upgrade --all` with the blanket-accept flags.
@@ -191,6 +208,17 @@ func RunUpgradeID(id string) (string, int) {
 	return runWinget2(wg, args...)
 }
 
+// RunUpgradeIDMonitored upgrades one package while streaming winget output and
+// killing the child process if it exceeds timeout.
+func RunUpgradeIDMonitored(ctx context.Context, id string, timeout time.Duration, logf func(string, ...any)) (string, int) {
+	wg := Find()
+	if wg == "" {
+		return "winget not found", -1
+	}
+	args := append([]string{"upgrade", "--id", id}, commonFlags...)
+	return runWingetMonitored(ctx, wg, args, timeout, time.Minute, logf)
+}
+
 // RunInstall installs a package (optional version).
 func RunInstall(id, version string) (string, int) {
 	wg := Find()
@@ -204,6 +232,20 @@ func RunInstall(id, version string) (string, int) {
 	return runWinget2(wg, args...)
 }
 
+// RunInstallMonitored installs one package with live output and timeout
+// enforcement.
+func RunInstallMonitored(ctx context.Context, id, version string, timeout time.Duration, logf func(string, ...any)) (string, int) {
+	wg := Find()
+	if wg == "" {
+		return "winget not found", -1
+	}
+	args := append([]string{"install", "--id", id}, commonFlags...)
+	if version != "" {
+		args = append(args, "--version", version)
+	}
+	return runWingetMonitored(ctx, wg, args, timeout, time.Minute, logf)
+}
+
 // RunUninstall uninstalls a package.
 func RunUninstall(id string) (string, int) {
 	wg := Find()
@@ -212,6 +254,17 @@ func RunUninstall(id string) (string, int) {
 	}
 	args := append([]string{"uninstall", "--id", id}, commonFlags...)
 	return runWinget2(wg, args...)
+}
+
+// RunUninstallMonitored uninstalls one package with live output and timeout
+// enforcement.
+func RunUninstallMonitored(ctx context.Context, id string, timeout time.Duration, logf func(string, ...any)) (string, int) {
+	wg := Find()
+	if wg == "" {
+		return "winget not found", -1
+	}
+	args := append([]string{"uninstall", "--id", id}, commonFlags...)
+	return runWingetMonitored(ctx, wg, args, timeout, time.Minute, logf)
 }
 
 // EnsureInstalled returns the path to winget.exe. If winget isn't present
@@ -377,20 +430,150 @@ func runWinget2(wg string, args ...string) (string, int) {
 	cmd := exec.Command(wg, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	b, err := cmd.CombinedOutput()
-	code := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			// Windows returns HRESULT-style exit codes as uint32; Go's
-			// ExitCode() keeps the high bit, so a winget "package not found"
-			// (0x8A150097 → int32 -1978335085) arrives here as 2316632211.
-			// Fold it back to the signed int32 form that matches
-			// Microsoft's documented constants.
-			code = int(int32(exitErr.ExitCode()))
-		} else {
-			return err.Error(), -1
-		}
+	code, ok := exitCode(err)
+	if !ok {
+		return err.Error(), -1
 	}
 	return string(b), code
+}
+
+func runWingetMonitored(ctx context.Context, wg string, args []string, timeout, idleLogInterval time.Duration, logf func(string, ...any)) (string, int) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	if idleLogInterval <= 0 {
+		idleLogInterval = time.Minute
+	}
+	cmd := exec.Command(wg, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err.Error(), -1
+	}
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Start(); err != nil {
+		return err.Error(), -1
+	}
+
+	var out cappedOutput
+	doneRead := make(chan struct{})
+	go func() {
+		sc := bufio.NewScanner(io.Reader(stdout))
+		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+		for sc.Scan() {
+			line := strings.TrimRight(sc.Text(), "\r\n")
+			if line == "" {
+				continue
+			}
+			out.AppendLine(line)
+			logf("%s", line)
+		}
+		close(doneRead)
+	}()
+
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
+
+	start := time.Now()
+	var timeoutC <-chan time.Time
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		timeoutC = timer.C
+	}
+	ticker := time.NewTicker(idleLogInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case err := <-waitCh:
+			<-doneRead
+			code, ok := exitCode(err)
+			if !ok {
+				return err.Error(), -1
+			}
+			return out.String(), code
+		case <-timeoutC:
+			msg := fmt.Sprintf("timeout_killed after %s", timeout.Round(time.Second))
+			logf("still running after %s; %s", time.Since(start).Round(time.Second), msg)
+			out.AppendLine("[corrivex] " + msg)
+			killProcessTree(cmd.Process.Pid)
+			waitForProcessCleanup(waitCh, doneRead, 1500*time.Millisecond)
+			return out.String(), TimeoutExitCode
+		case <-ctx.Done():
+			out.AppendLine("[corrivex] canceled")
+			killProcessTree(cmd.Process.Pid)
+			waitForProcessCleanup(waitCh, doneRead, 1500*time.Millisecond)
+			return out.String(), -1
+		case <-ticker.C:
+			logf("still running after %s (timeout %s)", time.Since(start).Round(time.Second), timeout.Round(time.Second))
+		}
+	}
+}
+
+func waitForProcessCleanup(waitCh <-chan error, doneRead <-chan struct{}, grace time.Duration) {
+	if grace <= 0 {
+		grace = time.Second
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	waitDone, readDone := false, false
+	for !(waitDone && readDone) {
+		select {
+		case <-waitCh:
+			waitDone = true
+		case <-doneRead:
+			readDone = true
+		case <-timer.C:
+			return
+		}
+	}
+}
+
+func exitCode(err error) (int, bool) {
+	if err == nil {
+		return 0, true
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return int(int32(exitErr.ExitCode())), true
+	}
+	return 0, false
+}
+
+func killProcessTree(pid int) {
+	if pid <= 0 {
+		return
+	}
+	_ = exec.Command("taskkill.exe", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
+}
+
+type cappedOutput struct {
+	mu        sync.Mutex
+	b         strings.Builder
+	truncated bool
+}
+
+func (c *cappedOutput) AppendLine(line string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.b.Len()+len(line)+1 <= maxWingetOutputBytes {
+		c.b.WriteString(line)
+		c.b.WriteByte('\n')
+		return
+	}
+	if !c.truncated {
+		c.truncated = true
+		c.b.WriteString("\n[corrivex] output truncated\n")
+	}
+}
+
+func (c *cappedOutput) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.TrimRight(c.b.String(), "\n")
 }
 
 // parseListTable extracts (name, id, version, source) tuples from a

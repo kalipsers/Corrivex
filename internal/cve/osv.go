@@ -16,21 +16,23 @@ const osvEndpoint = "https://api.osv.dev/v1/query"
 
 // OSVClient queries osv.dev. Free, no key, no rate limit in practice.
 type OSVClient struct {
-	HTTP *http.Client
+	HTTP     *http.Client
+	Endpoint string
 }
 
 func NewOSVClient() *OSVClient {
-	return &OSVClient{HTTP: &http.Client{Timeout: 15 * time.Second}}
+	return &OSVClient{HTTP: &http.Client{Timeout: 15 * time.Second}, Endpoint: osvEndpoint}
 }
 
 type osvRequest struct {
-	Package osvPackage `json:"package"`
+	Package OSVPackage `json:"package"`
 	Version string     `json:"version"`
 }
 
-type osvPackage struct {
+type OSVPackage struct {
 	Name      string `json:"name"`
 	Ecosystem string `json:"ecosystem,omitempty"`
+	PURL      string `json:"purl,omitempty"`
 }
 
 type osvResponse struct {
@@ -38,14 +40,14 @@ type osvResponse struct {
 }
 
 type osvVuln struct {
-	ID        string       `json:"id"`
-	Summary   string       `json:"summary"`
-	Details   string       `json:"details"`
-	Aliases   []string     `json:"aliases"`
-	Published string       `json:"published"`
-	Severity  []osvSev     `json:"severity"`
-	Affected  []osvAffect  `json:"affected"`
-	DBSpec    osvSpecific  `json:"database_specific"`
+	ID        string      `json:"id"`
+	Summary   string      `json:"summary"`
+	Details   string      `json:"details"`
+	Aliases   []string    `json:"aliases"`
+	Published string      `json:"published"`
+	Severity  []osvSev    `json:"severity"`
+	Affected  []osvAffect `json:"affected"`
+	DBSpec    osvSpecific `json:"database_specific"`
 }
 
 type osvSev struct {
@@ -78,16 +80,16 @@ type osvSpecific struct {
 // coverage there is thin — but for anything JS/Python/Go/Ruby/Rust/Java
 // with a winget shim, OSV tends to have it. Best-effort: callers should
 // fall back to NVD on empty result.
-func (c *OSVClient) Query(ctx context.Context, pkgName, version, ecosystem string) ([]db.CVEEntry, error) {
+func (c *OSVClient) Query(ctx context.Context, pkg OSVPackage, version string) ([]db.CVEEntry, error) {
 	req := osvRequest{
-		Package: osvPackage{Name: pkgName, Ecosystem: ecosystem},
+		Package: pkg,
 		Version: version,
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", osvEndpoint, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.Endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
