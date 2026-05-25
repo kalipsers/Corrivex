@@ -55,6 +55,41 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.11.0 — CVE detection precision and coverage
+
+**Minor** — improves CVE scanner coverage while preserving conservative
+version-specific filtering.
+
+- NVD scanning now discovers and caches CPE mappings through the free NVD CPE
+  API instead of only scanning hard-coded winget IDs.
+- NVD CVE lookups paginate through all results and honor version start/end
+  inclusive and exclusive bounds.
+- OSV queries support structured package identity hints where Corrivex has a
+  confident package mapping.
+- GitHub Global Security Advisories were added as an optional free source for
+  packages that can be mapped precisely.
+- FIRST EPSS scores are fetched after CVEs are found and displayed/exported as
+  prioritization metadata only.
+- New dashboard settings control enabled CVE sources and minimum NVD mapping
+  confidence.
+- Security view now shows scan coverage diagnostics so unmapped packages,
+  skipped versions, and source errors are visible instead of silent misses.
+
+### 1.10.0 — Restart task reconciliation and live output recovery
+
+**Minor** — server and agent now reconcile task state after restarts.
+
+- Agents track active/queued task metadata and keep a bounded live log tail for
+  dashboard reconnects.
+- Server can request a `task_snapshot` over the existing agent-initiated
+  WebSocket connection.
+- Agent sends a snapshot after reconnect so stale `delivered` DB tasks are
+  marked failed instead of remaining stuck.
+- Opening a host in the dashboard asks the connected agent to verify live task
+  state and replay recent task log output.
+- If the host is offline, the dashboard reports that status cannot be verified
+  until the agent reconnects.
+
 ### 1.9.0 — Isolated winget package updates + task autohealing
 
 **Minor** — agent-side update execution is now bounded and observable.
