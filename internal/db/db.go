@@ -227,6 +227,7 @@ var migrations = []struct {
 		`INSERT IGNORE INTO settings (key_name, value) VALUES
 			('check_interval_minutes',  '1'),
 			('full_scan_interval_hours','24'),
+			('winget_package_timeout_minutes','20'),
 			('install_service',         'true'),
 			('service_name',            'Corrivex Agent')`,
 	}},
@@ -334,6 +335,44 @@ var migrations = []struct {
 		`INSERT IGNORE INTO settings (key_name, value) VALUES
 			('vendor_version_enabled', 'true'),
 			('vendor_version_interval_hours', '6')`,
+	}},
+	{13, "Add full_scan task type for manual inventory refresh", []string{
+		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single','full_scan') NOT NULL DEFAULT 'check'`,
+	}},
+	{14, "Add chocolatey task types", []string{
+		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single','full_scan','choco_install','choco_upgrade','choco_upgrade_all','choco_uninstall') NOT NULL DEFAULT 'check'`,
+	}},
+	{15, "Local-installer catalog + local_install task type", []string{
+		`CREATE TABLE IF NOT EXISTS local_installers (
+			id INT NOT NULL AUTO_INCREMENT,
+			name VARCHAR(255) NOT NULL,
+			path VARCHAR(1000) NOT NULL,
+			framework_hint VARCHAR(40) NULL,
+			silent_args_override VARCHAR(500) NULL,
+			expected_exit_codes VARCHAR(120) NOT NULL DEFAULT '0,3010',
+			notes VARCHAR(1000) NULL,
+			created_by VARCHAR(100) NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_li_name (name)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+		`ALTER TABLE tasks MODIFY COLUMN type ENUM('upgrade_all','upgrade_package','install_package','uninstall_package','check','uninstall_self','windows_update_all','windows_update_single','full_scan','choco_install','choco_upgrade','choco_upgrade_all','choco_uninstall','local_install') NOT NULL DEFAULT 'check'`,
+		`INSERT IGNORE INTO settings (key_name, value) VALUES
+			('local_installer_allowed_prefixes', '')`,
+	}},
+	{16, "SMB credentials (AES-GCM encrypted)", []string{
+		`CREATE TABLE IF NOT EXISTS smb_credentials (
+			id INT NOT NULL AUTO_INCREMENT,
+			share_root VARCHAR(500) NOT NULL,
+			username VARCHAR(255) NOT NULL,
+			domain VARCHAR(255) NULL,
+			password_enc VARCHAR(500) NOT NULL,
+			notes VARCHAR(1000) NULL,
+			created_by VARCHAR(100) NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY uq_smb_root (share_root)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}},
 }
 
@@ -466,6 +505,7 @@ var migrationsSQLite = []struct {
 		)`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('check_interval_minutes','1')`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('full_scan_interval_hours','24')`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('winget_package_timeout_minutes','20')`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('install_service','true')`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('service_name','Corrivex Agent')`,
 	}},
@@ -566,6 +606,108 @@ var migrationsSQLite = []struct {
 			('vendor_version_enabled', 'true'),
 			('vendor_version_interval_hours', '6')`,
 	}},
+	{13, "Add full_scan task type for manual inventory refresh", []string{
+		// SQLite can't ALTER a CHECK constraint — rebuild the table.
+		// Uses the documented 12-step recipe from sqlite.org, minimised
+		// for the case where no indexes or triggers depend on the old
+		// table. Keep the row order stable to preserve pending task FIFO.
+		`CREATE TABLE IF NOT EXISTS tasks_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL,
+			type TEXT NOT NULL DEFAULT 'check' CHECK (type IN (
+				'upgrade_all','upgrade_package','install_package','uninstall_package',
+				'check','uninstall_self','windows_update_all','windows_update_single',
+				'full_scan')),
+			package_id TEXT,
+			package_name TEXT,
+			package_version TEXT,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','delivered','completed','failed')),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			delivered_at DATETIME,
+			completed_at DATETIME,
+			result TEXT
+		)`,
+		`INSERT INTO tasks_new (id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result)
+		 SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result FROM tasks`,
+		`DROP TABLE tasks`,
+		`ALTER TABLE tasks_new RENAME TO tasks`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_host_status ON tasks(hostname, status)`,
+	}},
+	{14, "Add chocolatey task types", []string{
+		// Same table-rebuild dance as migration 13; SQLite cannot ALTER a CHECK.
+		`CREATE TABLE IF NOT EXISTS tasks_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL,
+			type TEXT NOT NULL DEFAULT 'check' CHECK (type IN (
+				'upgrade_all','upgrade_package','install_package','uninstall_package',
+				'check','uninstall_self','windows_update_all','windows_update_single',
+				'full_scan',
+				'choco_install','choco_upgrade','choco_upgrade_all','choco_uninstall')),
+			package_id TEXT,
+			package_name TEXT,
+			package_version TEXT,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','delivered','completed','failed')),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			delivered_at DATETIME,
+			completed_at DATETIME,
+			result TEXT
+		)`,
+		`INSERT INTO tasks_new (id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result)
+		 SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result FROM tasks`,
+		`DROP TABLE tasks`,
+		`ALTER TABLE tasks_new RENAME TO tasks`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_host_status ON tasks(hostname, status)`,
+	}},
+	{15, "Local-installer catalog + local_install task type", []string{
+		`CREATE TABLE IF NOT EXISTS local_installers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			path TEXT NOT NULL,
+			framework_hint TEXT,
+			silent_args_override TEXT,
+			expected_exit_codes TEXT NOT NULL DEFAULT '0,3010',
+			notes TEXT,
+			created_by TEXT,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS tasks_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hostname TEXT NOT NULL,
+			type TEXT NOT NULL DEFAULT 'check' CHECK (type IN (
+				'upgrade_all','upgrade_package','install_package','uninstall_package',
+				'check','uninstall_self','windows_update_all','windows_update_single',
+				'full_scan',
+				'choco_install','choco_upgrade','choco_upgrade_all','choco_uninstall',
+				'local_install')),
+			package_id TEXT,
+			package_name TEXT,
+			package_version TEXT,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','delivered','completed','failed')),
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			delivered_at DATETIME,
+			completed_at DATETIME,
+			result TEXT
+		)`,
+		`INSERT INTO tasks_new (id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result)
+		 SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result FROM tasks`,
+		`DROP TABLE tasks`,
+		`ALTER TABLE tasks_new RENAME TO tasks`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_host_status ON tasks(hostname, status)`,
+		`INSERT OR IGNORE INTO settings (key_name, value) VALUES
+			('local_installer_allowed_prefixes', '')`,
+	}},
+	{16, "SMB credentials (AES-GCM encrypted)", []string{
+		`CREATE TABLE IF NOT EXISTS smb_credentials (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			share_root TEXT NOT NULL UNIQUE,
+			username TEXT NOT NULL,
+			domain TEXT,
+			password_enc TEXT NOT NULL,
+			notes TEXT,
+			created_by TEXT,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+	}},
 }
 
 type SchemaVersion struct {
@@ -658,17 +800,17 @@ func (d *DB) RemoveAllowedDomain(id int) error {
 // -- Tasks ------------------------------------------------------------------
 
 type Task struct {
-	ID             int64          `json:"id"`
-	Hostname       string         `json:"hostname"`
-	Type           string         `json:"type"`
-	PackageID      *string        `json:"package_id"`
-	PackageName    *string        `json:"package_name"`
-	PackageVersion *string        `json:"package_version"`
-	Status         string         `json:"status"`
-	CreatedAt      time.Time      `json:"created_at"`
-	DeliveredAt    *time.Time     `json:"delivered_at"`
-	CompletedAt    *time.Time     `json:"completed_at"`
-	Result         *string        `json:"result"`
+	ID             int64      `json:"id"`
+	Hostname       string     `json:"hostname"`
+	Type           string     `json:"type"`
+	PackageID      *string    `json:"package_id"`
+	PackageName    *string    `json:"package_name"`
+	PackageVersion *string    `json:"package_version"`
+	Status         string     `json:"status"`
+	CreatedAt      time.Time  `json:"created_at"`
+	DeliveredAt    *time.Time `json:"delivered_at"`
+	CompletedAt    *time.Time `json:"completed_at"`
+	Result         *string    `json:"result"`
 }
 
 func (d *DB) CreateTask(hostname, typ string, pkgID, pkgName, pkgVer *string) (int64, error) {
@@ -1177,13 +1319,16 @@ func (d *DB) PackageCacheSet(query string, results []byte) {
 
 // InstalledSoftware is the current snapshot row for one host+package pair.
 type InstalledSoftware struct {
-	Hostname    string    `json:"hostname"`
-	PackageID   string    `json:"id"`
-	PackageName string    `json:"name"`
-	Version     string    `json:"version"`
-	Source      string    `json:"source"`
-	FirstSeen   time.Time `json:"first_seen"`
-	LastSeen    time.Time `json:"last_seen"`
+	Hostname      string    `json:"hostname"`
+	PackageID     string    `json:"id"`
+	PackageName   string    `json:"name"`
+	Version       string    `json:"version"`
+	Source        string    `json:"source"`
+	FirstSeen     time.Time `json:"first_seen"`
+	LastSeen      time.Time `json:"last_seen"`
+	CascadeState  string    `json:"cascade_state,omitempty"`  // "winget" | "vendor_only" | "unmanaged" | "unknown"
+	VendorLatest  string    `json:"vendor_latest,omitempty"`  // vendor cache's latest_version for this package_id (if known)
+	VendorChannel string    `json:"vendor_channel,omitempty"` // "stable" | "esr" | "lts" | ...
 }
 
 // SoftwareHistory is one entry in the append-only audit log for a (host,
@@ -1290,12 +1435,39 @@ func (d *DB) SyncInstalledSoftware(hostname string, incoming []map[string]any) e
 	return tx.Commit()
 }
 
+// installedSoftwareSelect is the shared projection used by
+// InstalledSoftwareForHost and AllInstalledSoftware. It LEFT JOINs
+// against vendor_versions so the cascade_state can be derived on the fly
+// without a second query or persisted column — the CASE expression
+// works identically in MariaDB and SQLite.
+const installedSoftwareSelect = `
+SELECT
+	s.hostname,
+	s.package_id,
+	s.package_name,
+	s.version,
+	s.source,
+	s.first_seen,
+	s.last_seen,
+	CASE
+		WHEN v.package_key IS NOT NULL AND v.latest_version IS NOT NULL
+		     AND v.latest_version <> s.version THEN 'vendor_only'
+		WHEN v.package_key IS NOT NULL THEN 'winget'
+		WHEN s.source = 'registry' THEN 'unmanaged'
+		WHEN s.source IN ('winget','both') THEN 'winget'
+		ELSE 'unknown'
+	END AS cascade_state,
+	COALESCE(v.latest_version, ''),
+	COALESCE(v.channel, '')
+FROM installed_software s
+LEFT JOIN vendor_versions v ON v.package_key = LOWER(s.package_id)
+`
+
 // InstalledSoftwareForHost returns the current snapshot for hostname,
 // alphabetically sorted by name.
 func (d *DB) InstalledSoftwareForHost(hostname string) ([]InstalledSoftware, error) {
-	rows, err := d.sql.Query(
-		"SELECT hostname, package_id, package_name, version, source, first_seen, last_seen FROM installed_software WHERE hostname=? ORDER BY LOWER(package_name), package_id",
-		hostname)
+	q := installedSoftwareSelect + "WHERE s.hostname=? ORDER BY LOWER(s.package_name), s.package_id"
+	rows, err := d.sql.Query(q, hostname)
 	if err != nil {
 		return nil, err
 	}
@@ -1304,7 +1476,8 @@ func (d *DB) InstalledSoftwareForHost(hostname string) ([]InstalledSoftware, err
 	for rows.Next() {
 		var s InstalledSoftware
 		var pname, ver, src sql.NullString
-		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen); err != nil {
+		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen,
+			&s.CascadeState, &s.VendorLatest, &s.VendorChannel); err != nil {
 			return nil, err
 		}
 		s.PackageName = pname.String
@@ -1858,6 +2031,90 @@ func (d *DB) GetKEVSet() (map[string]bool, error) {
 	return out, rows.Err()
 }
 
+// -- Local installer catalog (1.7.1) --------------------------------------
+
+// LocalInstaller describes one admin-curated MSI/EXE staged on a local
+// path or UNC share. Stored in the local_installers table.
+type LocalInstaller struct {
+	ID                 int64     `json:"id"`
+	Name               string    `json:"name"`
+	Path               string    `json:"path"`
+	FrameworkHint      string    `json:"framework_hint,omitempty"`
+	SilentArgsOverride string    `json:"silent_args_override,omitempty"`
+	ExpectedExitCodes  string    `json:"expected_exit_codes"` // "0,3010"
+	Notes              string    `json:"notes,omitempty"`
+	CreatedBy          string    `json:"created_by,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+// ListLocalInstallers returns every row, sorted alphabetically by name.
+func (d *DB) ListLocalInstallers() ([]LocalInstaller, error) {
+	rows, err := d.sql.Query(
+		"SELECT id, name, path, COALESCE(framework_hint,''), COALESCE(silent_args_override,''), expected_exit_codes, COALESCE(notes,''), COALESCE(created_by,''), created_at FROM local_installers ORDER BY LOWER(name)")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LocalInstaller
+	for rows.Next() {
+		var li LocalInstaller
+		if err := rows.Scan(&li.ID, &li.Name, &li.Path, &li.FrameworkHint, &li.SilentArgsOverride,
+			&li.ExpectedExitCodes, &li.Notes, &li.CreatedBy, &li.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, li)
+	}
+	return out, rows.Err()
+}
+
+// GetLocalInstaller loads a single row by id.
+func (d *DB) GetLocalInstaller(id int64) (*LocalInstaller, error) {
+	row := d.sql.QueryRow(
+		"SELECT id, name, path, COALESCE(framework_hint,''), COALESCE(silent_args_override,''), expected_exit_codes, COALESCE(notes,''), COALESCE(created_by,''), created_at FROM local_installers WHERE id=?",
+		id)
+	var li LocalInstaller
+	if err := row.Scan(&li.ID, &li.Name, &li.Path, &li.FrameworkHint, &li.SilentArgsOverride,
+		&li.ExpectedExitCodes, &li.Notes, &li.CreatedBy, &li.CreatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &li, nil
+}
+
+// UpsertLocalInstaller inserts or updates by name. Returns the row id.
+func (d *DB) UpsertLocalInstaller(li LocalInstaller) (int64, error) {
+	// Check if a row with this name exists; update it if so, insert otherwise.
+	var existing int64
+	err := d.sql.QueryRow("SELECT id FROM local_installers WHERE name=?", li.Name).Scan(&existing)
+	if err == sql.ErrNoRows {
+		res, err := d.sql.Exec(
+			"INSERT INTO local_installers (name, path, framework_hint, silent_args_override, expected_exit_codes, notes, created_by) VALUES (?,?,?,?,?,?,?)",
+			li.Name, li.Path, nullIfEmpty(li.FrameworkHint), nullIfEmpty(li.SilentArgsOverride),
+			li.ExpectedExitCodes, nullIfEmpty(li.Notes), nullIfEmpty(li.CreatedBy))
+		if err != nil {
+			return 0, err
+		}
+		id, _ := res.LastInsertId()
+		return id, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	_, err = d.sql.Exec(
+		"UPDATE local_installers SET path=?, framework_hint=?, silent_args_override=?, expected_exit_codes=?, notes=? WHERE id=?",
+		li.Path, nullIfEmpty(li.FrameworkHint), nullIfEmpty(li.SilentArgsOverride),
+		li.ExpectedExitCodes, nullIfEmpty(li.Notes), existing)
+	return existing, err
+}
+
+// DeleteLocalInstaller removes one row by id.
+func (d *DB) DeleteLocalInstaller(id int64) error {
+	_, err := d.sql.Exec("DELETE FROM local_installers WHERE id=?", id)
+	return err
+}
+
 // -- Vendor version cache (1.6.1 cascade) ---------------------------------
 
 // VendorVersion is one row of the vendor_versions table.
@@ -1930,8 +2187,8 @@ func (d *DB) AllHostnames() ([]string, error) {
 // every host, alphabetically sorted by hostname then package name. Used by
 // the Reports tab for fleet-wide exports.
 func (d *DB) AllInstalledSoftware() ([]InstalledSoftware, error) {
-	rows, err := d.sql.Query(
-		"SELECT hostname, package_id, package_name, version, source, first_seen, last_seen FROM installed_software ORDER BY hostname, LOWER(package_name), package_id")
+	q := installedSoftwareSelect + "ORDER BY s.hostname, LOWER(s.package_name), s.package_id"
+	rows, err := d.sql.Query(q)
 	if err != nil {
 		return nil, err
 	}
@@ -1940,7 +2197,8 @@ func (d *DB) AllInstalledSoftware() ([]InstalledSoftware, error) {
 	for rows.Next() {
 		var s InstalledSoftware
 		var pname, ver, src sql.NullString
-		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen); err != nil {
+		if err := rows.Scan(&s.Hostname, &s.PackageID, &pname, &ver, &src, &s.FirstSeen, &s.LastSeen,
+			&s.CascadeState, &s.VendorLatest, &s.VendorChannel); err != nil {
 			return nil, err
 		}
 		s.PackageName = pname.String
@@ -2078,10 +2336,10 @@ func (d *DB) AllCVEFindings() ([]CVEHostFinding, error) {
 
 // ReportSummary is the set of counters rendered in the Reports tab top cards.
 type ReportSummary struct {
-	Devices            int `json:"devices"`
-	InstalledPackages  int `json:"installed_packages"`
-	DistinctAdmins     int `json:"distinct_local_admins"`
-	OpenCVEs           int `json:"open_cves"`
+	Devices           int `json:"devices"`
+	InstalledPackages int `json:"installed_packages"`
+	DistinctAdmins    int `json:"distinct_local_admins"`
+	OpenCVEs          int `json:"open_cves"`
 }
 
 // ReportsSummary computes the four counters shown on the Reports tab.

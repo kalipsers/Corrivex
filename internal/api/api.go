@@ -37,15 +37,15 @@ type CVEKicker interface {
 }
 
 type Server struct {
-	DB           *db.DB
-	AgentBinary  []byte // embedded corrivex-agent.exe
-	AgentSHA256  string // hex sha256 of AgentBinary
-	APISecret    string // empty disables auth
-	Broker       *events.Broker
-	Hub          *hub.Hub
-	CVE          CVEKicker // nil when scanning is disabled
-	mux          *http.ServeMux
-	hostRe       *regexp.Regexp
+	DB          *db.DB
+	AgentBinary []byte // embedded corrivex-agent.exe
+	AgentSHA256 string // hex sha256 of AgentBinary
+	APISecret   string // empty disables auth
+	Broker      *events.Broker
+	Hub         *hub.Hub
+	CVE         CVEKicker // nil when scanning is disabled
+	mux         *http.ServeMux
+	hostRe      *regexp.Regexp
 }
 
 func New(d *db.DB, agentBin []byte, secret string, br *events.Broker, hb *hub.Hub) *Server {
@@ -98,6 +98,15 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		return
 	case method == "POST" && action == "task_result":
 		s.taskResult(w, r)
+		return
+	case method == "GET" && action == "agent_config":
+		s.agentConfig(w, r)
+		return
+	case method == "GET" && action == "agent_local_installer":
+		s.agentLocalInstaller(w, r)
+		return
+	case method == "GET" && action == "agent_smb_creds":
+		s.agentSMBCreds(w, r)
 		return
 	// ---- auth endpoints (no session required) --------------------------
 	case method == "GET" && action == "auth_state":
@@ -171,6 +180,18 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.cveSummary(w, r)
 	case method == "POST" && action == "rescan_cves":
 		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.rescanCVEs)
+	case method == "GET" && action == "list_local_installers":
+		s.listLocalInstallers(w, r)
+	case method == "POST" && action == "save_local_installer":
+		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.saveLocalInstaller)
+	case method == "POST" && action == "delete_local_installer":
+		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.deleteLocalInstaller)
+	case method == "GET" && action == "list_smb_credentials":
+		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.listSMBCredentials)
+	case method == "POST" && action == "save_smb_credential":
+		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.saveSMBCredential)
+	case method == "POST" && action == "delete_smb_credential":
+		s.requireRoleReq(w, r, user, auth.RoleAdmin, s.deleteSMBCredential)
 	case method == "GET" && action == "vendor_versions":
 		s.vendorVersions(w, r)
 	case method == "GET" && action == "reports_summary":
@@ -299,10 +320,11 @@ func (s *Server) setSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowed := map[string]bool{
-		"check_interval_minutes":   true,
-		"full_scan_interval_hours": true,
-		"install_service":          true,
-		"service_name":             true,
+		"check_interval_minutes":         true,
+		"full_scan_interval_hours":       true,
+		"winget_package_timeout_minutes": true,
+		"install_service":                true,
+		"service_name":                   true,
 	}
 	for k, v := range body {
 		if !allowed[k] {
@@ -574,6 +596,78 @@ func (s *Server) report(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// agentConfig returns the subset of server settings the agent needs to
+// run a full scan correctly — currently the registry-scan skip filters.
+// TOFU-token authenticated the same way ping/report are. Keys mirror
+// what the Settings tab writes, so FiltersFromSettings can consume the
+// response directly.
+func (s *Server) agentConfig(w http.ResponseWriter, r *http.Request) {
+	hostname := s.normalizeHost(r.URL.Query().Get("hostname"))
+	if hostname == "" {
+		writeJSON(w, 400, map[string]string{"error": "Missing hostname"})
+		return
+	}
+	if _, ok := s.authAgent(w, r, hostname); !ok {
+		return
+	}
+	keys := []string{
+		"reg_scan_skip_system_components",
+		"reg_scan_skip_kb_updates",
+		"reg_scan_skip_redistributables",
+		"reg_scan_skip_guid_names",
+		"reg_scan_skip_ms_publisher",
+		"reg_scan_min_name_length",
+		"reg_scan_custom_skip_patterns",
+		"reg_scan_custom_skip_publishers",
+		"winget_package_timeout_minutes",
+	}
+	out := make(map[string]string, len(keys))
+	for _, k := range keys {
+		def := ""
+		if k == "winget_package_timeout_minutes" {
+			def = "20"
+		}
+		out[k] = s.DB.Setting(k, def)
+	}
+	writeJSON(w, 200, out)
+}
+
+// agentLocalInstaller returns one local_installers row so the agent
+// can resolve a local_install task to its (path, framework, silent
+// args, expected codes). TOFU-token authenticated.
+func (s *Server) agentLocalInstaller(w http.ResponseWriter, r *http.Request) {
+	hostname := s.normalizeHost(r.URL.Query().Get("hostname"))
+	if hostname == "" {
+		writeJSON(w, 400, map[string]string{"error": "Missing hostname"})
+		return
+	}
+	if _, ok := s.authAgent(w, r, hostname); !ok {
+		return
+	}
+	idStr := r.URL.Query().Get("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		writeJSON(w, 400, map[string]string{"error": "Missing or invalid id"})
+		return
+	}
+	li, err := s.DB.GetLocalInstaller(id)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if li == nil {
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	// Also include the allowed-prefixes setting so the agent can enforce
+	// whitelist locally (defence in depth: server writes into the field
+	// too when admins save a row).
+	writeJSON(w, 200, map[string]any{
+		"installer":        li,
+		"allowed_prefixes": s.DB.Setting("local_installer_allowed_prefixes", ""),
+	})
+}
+
 func (s *Server) taskResult(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		TaskID   int64  `json:"task_id"`
@@ -810,7 +904,9 @@ func (s *Server) agentWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentFrame(hostname string, data []byte, r *http.Request) {
-	var env struct{ Type string `json:"type"` }
+	var env struct {
+		Type string `json:"type"`
+	}
 	if err := json.Unmarshal(data, &env); err != nil {
 		return
 	}
@@ -859,6 +955,27 @@ func (s *Server) handleAgentFrame(hostname string, data []byte, r *http.Request)
 			}
 		}
 		s.Broker.Publish("task", evt)
+	case "task_progress":
+		var body struct {
+			TaskID         int64  `json:"task_id"`
+			PackageID      string `json:"package_id"`
+			PackageName    string `json:"package_name"`
+			Status         string `json:"status"`
+			Result         string `json:"result"`
+			ElapsedSeconds int    `json:"elapsed_seconds"`
+		}
+		if err := json.Unmarshal(data, &body); err != nil || body.TaskID == 0 {
+			return
+		}
+		s.Broker.Publish("task_progress", map[string]any{
+			"task_id":         body.TaskID,
+			"hostname":        hostname,
+			"package_id":      body.PackageID,
+			"package_name":    body.PackageName,
+			"status":          body.Status,
+			"result":          body.Result,
+			"elapsed_seconds": body.ElapsedSeconds,
+		})
 	case "log":
 		var body struct {
 			Line  string `json:"line"`
@@ -893,6 +1010,7 @@ func classifyResult(result string) string {
 		return "completed"
 	}
 	if strings.HasPrefix(r, "error:") || strings.HasPrefix(r, "exit:") ||
+		strings.Contains(r, "timeout_killed") ||
 		strings.Contains(r, "not_found") || strings.Contains(r, "no_applicable") {
 		return "failed"
 	}
@@ -975,6 +1093,8 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		"upgrade_all": true, "upgrade_package": true, "install_package": true,
 		"uninstall_package": true, "check": true,
 		"windows_update_all": true, "windows_update_single": true,
+		"full_scan":     true,
+		"local_install": true,
 	}
 	if hostname == "" || !valid[body.Type] {
 		writeJSON(w, 400, map[string]string{"error": "Invalid input"})
@@ -1019,11 +1139,11 @@ func (s *Server) pushTaskIfOnline(hostname string, id int64, typ, pkgID, pkgName
 	payload := map[string]any{
 		"type": "task",
 		"task": map[string]any{
-			"id":               id,
-			"type":             typ,
-			"package_id":       pkgID,
-			"package_name":     pkgName,
-			"package_version":  pkgVer,
+			"id":              id,
+			"type":            typ,
+			"package_id":      pkgID,
+			"package_name":    pkgName,
+			"package_version": pkgVer,
 		},
 	}
 	raw, err := json.Marshal(payload)
@@ -1147,6 +1267,173 @@ func (s *Server) cveSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, sum)
+}
+
+// -- Local-installer CRUD (1.7.1) -----------------------------------------
+
+func (s *Server) listLocalInstallers(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.DB.ListLocalInstallers()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if rows == nil {
+		rows = []db.LocalInstaller{}
+	}
+	writeJSON(w, 200, rows)
+}
+
+func (s *Server) saveLocalInstaller(w http.ResponseWriter, r *http.Request) {
+	var body db.LocalInstaller
+	if err := decode(r, &body); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad json"})
+		return
+	}
+	body.Name = strings.TrimSpace(body.Name)
+	body.Path = strings.TrimSpace(body.Path)
+	if body.Name == "" || body.Path == "" {
+		writeJSON(w, 400, map[string]string{"error": "name and path are required"})
+		return
+	}
+	if body.ExpectedExitCodes == "" {
+		body.ExpectedExitCodes = "0,3010"
+	}
+	// Basic path shape check: must be a UNC path or an absolute Windows
+	// path. Prevents admins saving obviously bogus entries that the agent
+	// would just reject.
+	if !(strings.HasPrefix(body.Path, `\\`) || looksLikeWindowsPath(body.Path)) {
+		writeJSON(w, 400, map[string]string{"error": "path must be a UNC share (\\\\server\\share\\...) or an absolute Windows path"})
+		return
+	}
+	id, err := s.DB.UpsertLocalInstaller(body)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "status": "ok"})
+}
+
+func (s *Server) deleteLocalInstaller(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID int64 `json:"id"`
+	}
+	if err := decode(r, &body); err != nil || body.ID <= 0 {
+		writeJSON(w, 400, map[string]string{"error": "Missing id"})
+		return
+	}
+	if err := s.DB.DeleteLocalInstaller(body.ID); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// -- SMB credential CRUD (1.7.2) ------------------------------------------
+
+func (s *Server) listSMBCredentials(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.DB.ListSMBCredentials()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if rows == nil {
+		rows = []db.SMBCredential{}
+	}
+	writeJSON(w, 200, rows)
+}
+
+func (s *Server) saveSMBCredential(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ShareRoot string `json:"share_root"`
+		Username  string `json:"username"`
+		Domain    string `json:"domain"`
+		Password  string `json:"password"`
+		Notes     string `json:"notes"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad json"})
+		return
+	}
+	body.ShareRoot = strings.TrimSpace(body.ShareRoot)
+	body.Username = strings.TrimSpace(body.Username)
+	if !strings.HasPrefix(body.ShareRoot, `\\`) {
+		writeJSON(w, 400, map[string]string{"error": "share_root must be a UNC path beginning with \\\\"})
+		return
+	}
+	id, err := s.DB.UpsertSMBCredential(db.SMBCredential{
+		ShareRoot: body.ShareRoot,
+		Username:  body.Username,
+		Domain:    body.Domain,
+		Notes:     body.Notes,
+	}, body.Password)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "status": "ok"})
+}
+
+func (s *Server) deleteSMBCredential(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID int64 `json:"id"`
+	}
+	if err := decode(r, &body); err != nil || body.ID <= 0 {
+		writeJSON(w, 400, map[string]string{"error": "Missing id"})
+		return
+	}
+	if err := s.DB.DeleteSMBCredential(body.ID); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+// agentSMBCreds returns the decrypted credential whose share_root is
+// the longest prefix of the path parameter, or 404 if none match.
+// TOFU-token authenticated.
+func (s *Server) agentSMBCreds(w http.ResponseWriter, r *http.Request) {
+	hostname := s.normalizeHost(r.URL.Query().Get("hostname"))
+	if hostname == "" {
+		writeJSON(w, 400, map[string]string{"error": "Missing hostname"})
+		return
+	}
+	if _, ok := s.authAgent(w, r, hostname); !ok {
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeJSON(w, 400, map[string]string{"error": "Missing path"})
+		return
+	}
+	c, err := s.DB.LookupSMBCredential(path)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if c == nil {
+		writeJSON(w, 404, map[string]string{"error": "no matching credential"})
+		return
+	}
+	writeJSON(w, 200, map[string]string{
+		"share_root": c.ShareRoot,
+		"username":   c.Username,
+		"domain":     c.Domain,
+		"password":   c.Password,
+	})
+}
+
+// looksLikeWindowsPath accepts C:\Something\... style. Does not resolve
+// the filesystem — just pattern-matches the leading drive letter so a
+// blatantly malformed value is rejected at save time.
+func looksLikeWindowsPath(p string) bool {
+	if len(p) < 3 {
+		return false
+	}
+	c := p[0]
+	if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
+		return false
+	}
+	return p[1] == ':' && (p[2] == '\\' || p[2] == '/')
 }
 
 // vendorVersions returns the entire vendor-API cache as JSON, for the

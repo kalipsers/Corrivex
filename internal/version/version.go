@@ -12,4 +12,4 @@
 package version
 
 // Version is the semver of this build. Bump on every change.
-var Version = "1.6.1"
+var Version = "1.9.0"
