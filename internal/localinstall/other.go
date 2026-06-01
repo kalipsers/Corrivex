@@ -25,6 +25,11 @@ type Result struct {
 	Success   bool
 }
 
+type ScanOptions struct {
+	MaxDepth int
+	MaxFiles int
+}
+
 func Detect(path string) (Detection, error) {
 	return Detection{Framework: FrameworkUnknown}, nil
 }
@@ -33,3 +38,6 @@ func Run(ctx context.Context, opts RunOptions) (Result, error) {
 }
 func ExitCodeLabel(code int) string { return "" }
 func (r Result) String() string     { return "" }
+func ScanDirectory(root string, opts ScanOptions) ([]DiscoveredInstaller, error) {
+	return nil, errors.New("localinstall scan: Windows-only")
+}

@@ -156,6 +156,81 @@ func (r *Runtime) fetchSMBCred(path string) (*smbCredResp, error) {
 	return &out, nil
 }
 
+type smbRootResp struct {
+	ShareRoot string `json:"share_root"`
+}
+
+func (r *Runtime) fetchSMBRoots() ([]string, error) {
+	u := fmt.Sprintf("%s/api/?action=agent_smb_roots&hostname=%s",
+		strings.TrimRight(r.Cfg.Server, "/"), mustHost())
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if r.Cfg.APISecret != "" {
+		req.Header.Set("X-API-Secret", r.Cfg.APISecret)
+	}
+	if r.Cfg.AgentToken != "" {
+		req.Header.Set("X-Corrivex-Token", r.Cfg.AgentToken)
+	}
+	cli := &http.Client{Timeout: 10 * time.Second}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return nil, nil
+	}
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var rows []smbRootResp
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		root := strings.TrimSpace(row.ShareRoot)
+		if root != "" {
+			out = append(out, root)
+		}
+	}
+	return out, nil
+}
+
+func (r *Runtime) scanLocalInstallerShares() []localinstall.DiscoveredInstaller {
+	roots, err := r.fetchSMBRoots()
+	if err != nil {
+		r.log("local installer share roots: %v", err)
+		return nil
+	}
+	if len(roots) == 0 {
+		return nil
+	}
+	var all []localinstall.DiscoveredInstaller
+	for _, root := range roots {
+		r.log("local installer scan: %s", root)
+		teardown := r.mountSMBIfNeeded(root)
+		found, err := localinstall.ScanDirectory(root, localinstall.ScanOptions{MaxDepth: 4, MaxFiles: 200})
+		if teardown != nil {
+			teardown()
+		}
+		if err != nil {
+			r.log("local installer scan failed for %s: %v", root, err)
+			continue
+		}
+		r.log("local installer scan: %d installer(s) found under %s", len(found), root)
+		all = append(all, found...)
+	}
+	return all
+}
+
 // urlEscape is a tiny replacement for url.QueryEscape that keeps the
 // agent.go imports clean. Handles the characters we actually see in
 // UNC paths (backslash, space, colon).

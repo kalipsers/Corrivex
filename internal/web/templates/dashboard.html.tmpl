@@ -1734,9 +1734,10 @@ function renderDeviceModal(pc) {
   // Always render the refresh button — useful even when pkgs.length == 0
   // to force-reconcile after an out-of-band upgrade.
   html += '<button class="btn btn-sm btn-ghost" id="refresh-inventory-btn" data-action="full-scan" data-host="' + escapeHTML(pc.hostname) + '" title="Force the agent to re-run winget list + registry scan now. Useful when a package was upgraded outside Corrivex.">Refresh inventory</button>';
-  if (pkgs.length > 0) {
+  const wingetPendingCount = pkgs.filter(p => (p.source || 'winget') !== 'local').length;
+  if (wingetPendingCount > 0) {
     const allDisabled = !!allUpgradeState;
-    const allLabel = allUpgradeState === 'pending' ? 'Upgrading all…' : allUpgradeState === 'delivered' ? 'Running…' : 'Upgrade all';
+    const allLabel = allUpgradeState === 'pending' ? 'Upgrading all…' : allUpgradeState === 'delivered' ? 'Running…' : 'Upgrade all winget';
     html += '<button class="btn btn-sm btn-primary" id="upgrade-all-btn" data-action="upgrade-all" data-host="' + escapeHTML(pc.hostname) + '"' + (allDisabled ? ' disabled' : '') + '>' + escapeHTML(allLabel) + '</button>';
   }
   html += '</div>';
@@ -1757,19 +1758,21 @@ function renderDeviceModal(pc) {
     html += '<div class="pkg-list">';
     for (const p of pkgs) {
       const pid = p.id || '';
+      const source = p.source || 'winget';
+      const taskType = source === 'local' ? 'local_install' : 'upgrade_package';
       const pname = p.name || '';
-      const effectiveStatus = allUpgradeState || pkgLiveStatus[pid]?.status || '';
+      const effectiveStatus = (source === 'local' ? '' : allUpgradeState) || pkgLiveStatus[pid]?.status || '';
       const rowCls = effectiveStatus === 'delivered' || effectiveStatus === 'pending' || effectiveStatus === 'running' ? ' is-running' : '';
       const disabled = effectiveStatus === 'pending' || effectiveStatus === 'delivered' || effectiveStatus === 'running';
       html += '<label class="pkg' + rowCls + '" data-pkg-row="' + escapeHTML(pid) + '">';
-      html += '<input type="checkbox" class="pkg-check" data-id="' + escapeHTML(pid) + '" data-name="' + escapeHTML(pname) + '"' + (disabled ? ' disabled' : '') + '>';
-      html += '<div><strong>' + escapeHTML(pname || pid || '?') + '</strong><div class="pkg-id">' + escapeHTML(pid) + '</div></div>';
+      html += '<input type="checkbox" class="pkg-check" data-id="' + escapeHTML(pid) + '" data-name="' + escapeHTML(pname) + '" data-task="' + escapeHTML(taskType) + '"' + (disabled ? ' disabled' : '') + '>';
+      html += '<div><strong>' + escapeHTML(pname || pid || '?') + '</strong><div class="pkg-id">' + escapeHTML(p.package_id || pid) + (source === 'local' ? ' - local installer' : '') + '</div></div>';
       html += '<span class="pkg-v">' + escapeHTML(p.version || '?') + '</span>';
       html += '<span class="pkg-arrow">→</span>';
       html += '<span class="pkg-v"><strong>' + escapeHTML(p.available || '?') + '</strong></span>';
       html += '<span class="pkg-status" data-pkg-status="' + escapeHTML(pid) + '">' + pkgStatusChip(effectiveStatus) + '</span>';
       html += '<span class="pkg-cve" data-pkg-cve="' + escapeHTML(pid) + '"></span>';
-      html += '<button class="btn btn-sm btn-cta-outline" data-action="upgrade-one" data-host="' + escapeHTML(pc.hostname) + '" data-id="' + escapeHTML(pid) + '" data-name="' + escapeHTML(pname) + '"' + (disabled ? ' disabled' : '') + '>' + (disabled ? '…' : 'Upgrade') + '</button>';
+      html += '<button class="btn btn-sm btn-cta-outline" data-action="upgrade-one" data-task="' + escapeHTML(taskType) + '" data-host="' + escapeHTML(pc.hostname) + '" data-id="' + escapeHTML(pid) + '" data-name="' + escapeHTML(pname) + '"' + (disabled ? ' disabled' : '') + '>' + (disabled ? '...' : (source === 'local' ? 'Install' : 'Upgrade')) + '</button>';
       html += '</label>';
     }
     html += '</div>';
@@ -2376,7 +2379,7 @@ function bindBulkSelect() {
     for (const b of sel) {
       setPkgRowStatus(b.dataset.id, 'pending');
       try {
-        await createTaskQuiet({ hostname: host, type: 'upgrade_package', package_id: b.dataset.id, package_name: b.dataset.name });
+        await createTaskQuiet({ hostname: host, type: b.dataset.task || 'upgrade_package', package_id: b.dataset.id, package_name: b.dataset.name });
         ok++;
       } catch {
         fail++;
@@ -3189,7 +3192,8 @@ document.addEventListener('click', async (e) => {
   if (a === 'upgrade-one') {
     setPkgRowStatus(btn.dataset.id, 'pending');
     popLogPane();
-    return createTask({ hostname: btn.dataset.host, type: 'upgrade_package', package_id: btn.dataset.id, package_name: btn.dataset.name }, 'Package upgrade queued');
+    const taskType = btn.dataset.task || 'upgrade_package';
+    return createTask({ hostname: btn.dataset.host, type: taskType, package_id: btn.dataset.id, package_name: btn.dataset.name }, taskType === 'local_install' ? 'Local installer queued' : 'Package upgrade queued');
   }
   if (a === 'wu-install-all') {
     setWUAllState('pending');

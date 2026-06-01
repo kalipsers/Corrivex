@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -407,6 +408,12 @@ var migrations = []struct {
 			('cve_source_epss', 'true'),
 			('cve_min_mapping_confidence', 'high')`,
 	}},
+	{18, "Discovered local installers from SMB shares", []string{
+		`ALTER TABLE local_installers ADD COLUMN IF NOT EXISTS discovered_name VARCHAR(255) NULL`,
+		`ALTER TABLE local_installers ADD COLUMN IF NOT EXISTS discovered_version VARCHAR(120) NULL`,
+		`ALTER TABLE local_installers ADD COLUMN IF NOT EXISTS discovered_source VARCHAR(40) NULL`,
+		`ALTER TABLE local_installers ADD COLUMN IF NOT EXISTS discovered_at DATETIME NULL`,
+	}},
 }
 
 func (d *DB) Migrate() error {
@@ -772,6 +779,13 @@ var migrationsSQLite = []struct {
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('cve_source_epss', 'true')`,
 		`INSERT OR IGNORE INTO settings (key_name, value) VALUES ('cve_min_mapping_confidence', 'high')`,
 	}},
+	{18, "Discovered local installers from SMB shares", []string{
+		`ALTER TABLE local_installers ADD COLUMN discovered_name TEXT`,
+		`ALTER TABLE local_installers ADD COLUMN discovered_version TEXT`,
+		`ALTER TABLE local_installers ADD COLUMN discovered_source TEXT`,
+		`ALTER TABLE local_installers ADD COLUMN discovered_at DATETIME`,
+		`CREATE INDEX IF NOT EXISTS idx_local_installers_discovered ON local_installers(discovered_name, discovered_version)`,
+	}},
 }
 
 type SchemaVersion struct {
@@ -1031,6 +1045,7 @@ type FullReport struct {
 	Packages          []map[string]any `json:"packages"`
 	WindowsUpdates    []map[string]any `json:"windows_updates"`
 	InstalledSoftware []map[string]any `json:"installed_software"`
+	LocalInstallers   []map[string]any `json:"local_installers"`
 	UpdateCount       *int             `json:"update_count"`
 	AgentLog          string           `json:"agent_log"`
 }
@@ -1055,11 +1070,6 @@ func (d *DB) StoreFullReport(r FullReport, clientIP string) ([]Task, error) {
 	domain := strings.ToLower(strings.TrimSpace(r.Domain))
 
 	var packagesJSON, usersJSON, adminsJSON, windowsJSON *string
-	if r.Packages != nil {
-		b, _ := json.Marshal(r.Packages)
-		s := string(b)
-		packagesJSON = &s
-	}
 	if r.Users != nil {
 		b, _ := json.Marshal(r.Users)
 		s := string(b)
@@ -1074,6 +1084,20 @@ func (d *DB) StoreFullReport(r FullReport, clientIP string) ([]Task, error) {
 		b, _ := json.Marshal(r.WindowsUpdates)
 		s := string(b)
 		windowsJSON = &s
+	}
+	if action == "full_report" && len(r.LocalInstallers) > 0 {
+		localPkgs, err := d.SyncDiscoveredLocalInstallers(hostname, r.LocalInstallers, r.InstalledSoftware)
+		if err != nil {
+			return nil, err
+		}
+		if len(localPkgs) > 0 {
+			r.Packages = append(r.Packages, localPkgs...)
+		}
+	}
+	if r.Packages != nil {
+		b, _ := json.Marshal(r.Packages)
+		s := string(b)
+		packagesJSON = &s
 	}
 	updateCount := -1
 	if r.Packages != nil {
@@ -2270,21 +2294,25 @@ func (d *DB) GetKEVSet() (map[string]bool, error) {
 // LocalInstaller describes one admin-curated MSI/EXE staged on a local
 // path or UNC share. Stored in the local_installers table.
 type LocalInstaller struct {
-	ID                 int64     `json:"id"`
-	Name               string    `json:"name"`
-	Path               string    `json:"path"`
-	FrameworkHint      string    `json:"framework_hint,omitempty"`
-	SilentArgsOverride string    `json:"silent_args_override,omitempty"`
-	ExpectedExitCodes  string    `json:"expected_exit_codes"` // "0,3010"
-	Notes              string    `json:"notes,omitempty"`
-	CreatedBy          string    `json:"created_by,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
+	ID                 int64      `json:"id"`
+	Name               string     `json:"name"`
+	Path               string     `json:"path"`
+	FrameworkHint      string     `json:"framework_hint,omitempty"`
+	SilentArgsOverride string     `json:"silent_args_override,omitempty"`
+	ExpectedExitCodes  string     `json:"expected_exit_codes"` // "0,3010"
+	Notes              string     `json:"notes,omitempty"`
+	CreatedBy          string     `json:"created_by,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	DiscoveredName     string     `json:"discovered_name,omitempty"`
+	DiscoveredVersion  string     `json:"discovered_version,omitempty"`
+	DiscoveredSource   string     `json:"discovered_source,omitempty"`
+	DiscoveredAt       *time.Time `json:"discovered_at,omitempty"`
 }
 
 // ListLocalInstallers returns every row, sorted alphabetically by name.
 func (d *DB) ListLocalInstallers() ([]LocalInstaller, error) {
 	rows, err := d.sql.Query(
-		"SELECT id, name, path, COALESCE(framework_hint,''), COALESCE(silent_args_override,''), expected_exit_codes, COALESCE(notes,''), COALESCE(created_by,''), created_at FROM local_installers ORDER BY LOWER(name)")
+		"SELECT id, name, path, COALESCE(framework_hint,''), COALESCE(silent_args_override,''), expected_exit_codes, COALESCE(notes,''), COALESCE(created_by,''), created_at, COALESCE(discovered_name,''), COALESCE(discovered_version,''), COALESCE(discovered_source,''), discovered_at FROM local_installers ORDER BY LOWER(name)")
 	if err != nil {
 		return nil, err
 	}
@@ -2292,9 +2320,14 @@ func (d *DB) ListLocalInstallers() ([]LocalInstaller, error) {
 	var out []LocalInstaller
 	for rows.Next() {
 		var li LocalInstaller
+		var discoveredAt sql.NullTime
 		if err := rows.Scan(&li.ID, &li.Name, &li.Path, &li.FrameworkHint, &li.SilentArgsOverride,
-			&li.ExpectedExitCodes, &li.Notes, &li.CreatedBy, &li.CreatedAt); err != nil {
+			&li.ExpectedExitCodes, &li.Notes, &li.CreatedBy, &li.CreatedAt, &li.DiscoveredName,
+			&li.DiscoveredVersion, &li.DiscoveredSource, &discoveredAt); err != nil {
 			return nil, err
+		}
+		if discoveredAt.Valid {
+			li.DiscoveredAt = &discoveredAt.Time
 		}
 		out = append(out, li)
 	}
@@ -2304,15 +2337,20 @@ func (d *DB) ListLocalInstallers() ([]LocalInstaller, error) {
 // GetLocalInstaller loads a single row by id.
 func (d *DB) GetLocalInstaller(id int64) (*LocalInstaller, error) {
 	row := d.sql.QueryRow(
-		"SELECT id, name, path, COALESCE(framework_hint,''), COALESCE(silent_args_override,''), expected_exit_codes, COALESCE(notes,''), COALESCE(created_by,''), created_at FROM local_installers WHERE id=?",
+		"SELECT id, name, path, COALESCE(framework_hint,''), COALESCE(silent_args_override,''), expected_exit_codes, COALESCE(notes,''), COALESCE(created_by,''), created_at, COALESCE(discovered_name,''), COALESCE(discovered_version,''), COALESCE(discovered_source,''), discovered_at FROM local_installers WHERE id=?",
 		id)
 	var li LocalInstaller
+	var discoveredAt sql.NullTime
 	if err := row.Scan(&li.ID, &li.Name, &li.Path, &li.FrameworkHint, &li.SilentArgsOverride,
-		&li.ExpectedExitCodes, &li.Notes, &li.CreatedBy, &li.CreatedAt); err != nil {
+		&li.ExpectedExitCodes, &li.Notes, &li.CreatedBy, &li.CreatedAt, &li.DiscoveredName,
+		&li.DiscoveredVersion, &li.DiscoveredSource, &discoveredAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
+	}
+	if discoveredAt.Valid {
+		li.DiscoveredAt = &discoveredAt.Time
 	}
 	return &li, nil
 }
@@ -2347,6 +2385,195 @@ func (d *DB) UpsertLocalInstaller(li LocalInstaller) (int64, error) {
 func (d *DB) DeleteLocalInstaller(id int64) error {
 	_, err := d.sql.Exec("DELETE FROM local_installers WHERE id=?", id)
 	return err
+}
+
+// SyncDiscoveredLocalInstallers stores installers found by an agent while
+// scanning configured SMB shares and returns pending-update rows that should be
+// merged into pcs.last_packages for that host.
+func (d *DB) SyncDiscoveredLocalInstallers(hostname string, installers, installed []map[string]any) ([]map[string]any, error) {
+	type installedRow struct {
+		id, name, version string
+	}
+	var inventory []installedRow
+	for _, p := range installed {
+		id := stringFromAny(p["id"])
+		name := stringFromAny(p["name"])
+		version := stringFromAny(p["version"])
+		if id == "" || name == "" || version == "" || len(versionParts(version)) == 0 {
+			continue
+		}
+		inventory = append(inventory, installedRow{id: id, name: name, version: version})
+	}
+
+	best := map[string]map[string]any{}
+	for _, raw := range installers {
+		path := stringFromAny(raw["path"])
+		name := stringFromAny(raw["name"])
+		version := stringFromAny(raw["version"])
+		if path == "" || name == "" {
+			continue
+		}
+		li := LocalInstaller{
+			Name:              discoveredInstallerDisplayName(name, version),
+			Path:              path,
+			FrameworkHint:     stringFromAny(raw["framework_hint"]),
+			ExpectedExitCodes: "0,3010",
+			Notes:             "Discovered on " + hostname,
+			CreatedBy:         "agent:" + hostname,
+			DiscoveredName:    name,
+			DiscoveredVersion: version,
+			DiscoveredSource:  firstNonEmptyDB(stringFromAny(raw["source"]), "smb_scan"),
+		}
+		id, err := d.upsertDiscoveredLocalInstaller(li)
+		if err != nil {
+			return nil, err
+		}
+		if version == "" || len(versionParts(version)) == 0 {
+			continue
+		}
+		for _, inst := range inventory {
+			if !softwareNamesMatch(inst.name, name) || compareLooseVersion(version, inst.version) <= 0 {
+				continue
+			}
+			row := map[string]any{
+				"id":                   fmt.Sprint(id),
+				"package_id":           inst.id,
+				"name":                 inst.name,
+				"version":              inst.version,
+				"available":            version,
+				"source":               "local",
+				"local_installer_id":   id,
+				"local_installer_path": path,
+			}
+			cur := best[inst.id]
+			if cur == nil || compareLooseVersion(version, stringFromAny(cur["available"])) > 0 {
+				best[inst.id] = row
+			}
+		}
+	}
+	out := make([]map[string]any, 0, len(best))
+	for _, row := range best {
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func (d *DB) upsertDiscoveredLocalInstaller(li LocalInstaller) (int64, error) {
+	var existing int64
+	err := d.sql.QueryRow("SELECT id FROM local_installers WHERE path=?", li.Path).Scan(&existing)
+	if err == sql.ErrNoRows {
+		err = d.sql.QueryRow("SELECT id FROM local_installers WHERE name=?", li.Name).Scan(&existing)
+	}
+	if err == sql.ErrNoRows {
+		res, err := d.sql.Exec(
+			`INSERT INTO local_installers
+			 (name, path, framework_hint, silent_args_override, expected_exit_codes, notes, created_by,
+			  discovered_name, discovered_version, discovered_source, discovered_at)
+			 VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`,
+			li.Name, li.Path, nullIfEmpty(li.FrameworkHint), nil, li.ExpectedExitCodes, nullIfEmpty(li.Notes),
+			nullIfEmpty(li.CreatedBy), nullIfEmpty(li.DiscoveredName), nullIfEmpty(li.DiscoveredVersion), nullIfEmpty(li.DiscoveredSource))
+		if err != nil {
+			return 0, err
+		}
+		id, _ := res.LastInsertId()
+		return id, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	_, err = d.sql.Exec(
+		`UPDATE local_installers
+		    SET name=?, path=?, framework_hint=?, expected_exit_codes=?, notes=?,
+		        discovered_name=?, discovered_version=?, discovered_source=?, discovered_at=CURRENT_TIMESTAMP
+		  WHERE id=?`,
+		li.Name, li.Path, nullIfEmpty(li.FrameworkHint), li.ExpectedExitCodes, nullIfEmpty(li.Notes),
+		nullIfEmpty(li.DiscoveredName), nullIfEmpty(li.DiscoveredVersion), nullIfEmpty(li.DiscoveredSource), existing)
+	return existing, err
+}
+
+func discoveredInstallerDisplayName(name, version string) string {
+	name = strings.TrimSpace(name)
+	version = strings.TrimSpace(version)
+	if version == "" || strings.Contains(name, version) {
+		return name
+	}
+	return strings.TrimSpace(name + " " + version)
+}
+
+func softwareNamesMatch(installed, discovered string) bool {
+	a := normalizeSoftwareName(installed)
+	b := normalizeSoftwareName(discovered)
+	return a != "" && b != "" && a == b
+}
+
+func normalizeSoftwareName(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	for _, tail := range []string{" (64-bit)", " (32-bit)", " x64", " x86", " 64-bit", " 32-bit"} {
+		s = strings.TrimSuffix(s, tail)
+	}
+	repl := strings.NewReplacer("++", "plusplus", "&", " and ", ".", " ", "-", " ", "_", " ")
+	words := strings.Fields(repl.Replace(s))
+	out := words[:0]
+	for _, w := range words {
+		switch w {
+		case "setup", "installer", "install", "windows", "win64", "win32", "x64", "x86", "amd64":
+			continue
+		default:
+			out = append(out, w)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+func compareLooseVersion(a, b string) int {
+	as := versionParts(a)
+	bs := versionParts(b)
+	n := len(as)
+	if len(bs) > n {
+		n = len(bs)
+	}
+	for i := 0; i < n; i++ {
+		av, bv := 0, 0
+		if i < len(as) {
+			av = as[i]
+		}
+		if i < len(bs) {
+			bv = bs[i]
+		}
+		if av > bv {
+			return 1
+		}
+		if av < bv {
+			return -1
+		}
+	}
+	return 0
+}
+
+func versionParts(s string) []int {
+	fields := strings.FieldsFunc(s, func(r rune) bool { return r < '0' || r > '9' })
+	out := make([]int, 0, len(fields))
+	for _, f := range fields {
+		if f == "" {
+			continue
+		}
+		n, _ := strconv.Atoi(f)
+		out = append(out, n)
+	}
+	return out
+}
+
+func stringFromAny(v any) string {
+	switch x := v.(type) {
+	case string:
+		return strings.TrimSpace(x)
+	case fmt.Stringer:
+		return strings.TrimSpace(x.String())
+	case nil:
+		return ""
+	default:
+		return strings.TrimSpace(fmt.Sprint(x))
+	}
 }
 
 // -- Vendor version cache (1.6.1 cascade) ---------------------------------

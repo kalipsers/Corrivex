@@ -460,6 +460,7 @@ func (r *Runtime) fullScanWS(ctx context.Context) {
 	// still appear in the inventory. Filters are the defaults for now —
 	// admin overrides from the Settings tab are wired in 1.6.1.
 	installed = r.mergeRegistry(installed, r.log)
+	localInstallers := r.scanLocalInstallerShares()
 	users := detectLocalUsers()
 	admins := detectLocalAdmins()
 
@@ -486,8 +487,9 @@ func (r *Runtime) fullScanWS(ctx context.Context) {
 		"local_admins":       admins,
 		"packages":           pkgs,
 		"installed_software": installed,
+		"local_installers":   localInstallers,
 		"windows_updates":    wuList,
-		"update_count":       len(pkgs),
+		"update_count":       len(pkgs) + len(localInstallers),
 	}
 	if !r.sendWS(body) {
 		// Fallback: HTTP report (used only if the WS went away right now).
@@ -512,6 +514,7 @@ func (r *Runtime) FullScan() {
 		r.log("winget list (installed) failed: %v", err)
 	}
 	installed = r.mergeRegistry(installed, r.log)
+	localInstallers := r.scanLocalInstallerShares()
 	users := detectLocalUsers()
 	admins := detectLocalAdmins()
 
@@ -526,7 +529,8 @@ func (r *Runtime) FullScan() {
 		"local_admins":       admins,
 		"packages":           pkgs,
 		"installed_software": installed,
-		"update_count":       len(pkgs),
+		"local_installers":   localInstallers,
+		"update_count":       len(pkgs) + len(localInstallers),
 		"agent_log":          r.drainLog(),
 	}
 

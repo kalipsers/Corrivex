@@ -133,7 +133,7 @@ func (d *DB) LookupSMBCredential(path string) (*SMBCredential, error) {
 		if err := rows.Scan(&c.ID, &c.ShareRoot, &c.Username, &c.Domain, &enc, &c.Notes, &c.CreatedBy, &c.CreatedAt); err != nil {
 			return nil, err
 		}
-		if !strings.HasPrefix(lowPath, strings.ToLower(c.ShareRoot)) {
+		if !uncPathHasRoot(lowPath, strings.ToLower(c.ShareRoot)) {
 			continue
 		}
 		ct, err := base64.StdEncoding.DecodeString(enc)
@@ -150,6 +150,15 @@ func (d *DB) LookupSMBCredential(path string) (*SMBCredential, error) {
 	return nil, rows.Err()
 }
 
+func uncPathHasRoot(path, root string) bool {
+	path = strings.TrimRight(path, `\/`)
+	root = strings.TrimRight(root, `\/`)
+	if path == root {
+		return true
+	}
+	return strings.HasPrefix(path, root+`\`) || strings.HasPrefix(path, root+`/`)
+}
+
 // -- encryption helpers ----------------------------------------------------
 
 var (
@@ -159,8 +168,8 @@ var (
 
 // smbKey returns the 32-byte AES-256 key used for SMB password at-rest
 // encryption. Source precedence:
-//   1. CORRIVEX_SMB_KEY env var (hex, 64 chars). Fails fast if malformed.
-//   2. `smb_key` row in the settings table (generated on first boot).
+//  1. CORRIVEX_SMB_KEY env var (hex, 64 chars). Fails fast if malformed.
+//  2. `smb_key` row in the settings table (generated on first boot).
 func (d *DB) smbKey() ([]byte, error) {
 	smbKeyCacheMu.Lock()
 	defer smbKeyCacheMu.Unlock()

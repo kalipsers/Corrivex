@@ -108,6 +108,9 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case method == "GET" && action == "agent_smb_creds":
 		s.agentSMBCreds(w, r)
 		return
+	case method == "GET" && action == "agent_smb_roots":
+		s.agentSMBRoots(w, r)
+		return
 	// ---- auth endpoints (no session required) --------------------------
 	case method == "GET" && action == "auth_state":
 		s.authState(w, r)
@@ -1551,6 +1554,30 @@ func (s *Server) agentSMBCreds(w http.ResponseWriter, r *http.Request) {
 		"domain":     c.Domain,
 		"password":   c.Password,
 	})
+}
+
+// agentSMBRoots returns configured share roots so the agent can discover
+// installers from shares it can authenticate to. Passwords are never returned
+// by this endpoint; the agent asks agent_smb_creds for a specific path/root.
+func (s *Server) agentSMBRoots(w http.ResponseWriter, r *http.Request) {
+	hostname := s.normalizeHost(r.URL.Query().Get("hostname"))
+	if hostname == "" {
+		writeJSON(w, 400, map[string]string{"error": "Missing hostname"})
+		return
+	}
+	if _, ok := s.authAgent(w, r, hostname); !ok {
+		return
+	}
+	rows, err := s.DB.ListSMBCredentials()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	out := make([]map[string]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, map[string]string{"share_root": row.ShareRoot})
+	}
+	writeJSON(w, 200, out)
 }
 
 // looksLikeWindowsPath accepts C:\Something\... style. Does not resolve

@@ -55,6 +55,22 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.12.0 — SMB share installer discovery
+
+**Minor** — configured SMB shares can now feed local installer updates.
+
+- Windows agents ask the server for configured SMB share roots during a full
+  scan, authenticate with the stored share credential, and scan the share for
+  `.msi` / `.exe` installers.
+- Discovered installers are analyzed for framework, product name, and version
+  using filename metadata plus the existing local-installer detector.
+- The server stores discovered installers in the local installer catalog and
+  matches newer versions against installed software reported by the same host.
+- Matching share installers are shown in the host Updates tab as local
+  installer updates and queue the existing `local_install` task type.
+- SMB credential matching now respects UNC path boundaries so
+  `\\server\share` does not accidentally match `\\server\share2`.
+
 ### 1.11.0 — CVE detection precision and coverage
 
 **Minor** — improves CVE scanner coverage while preserving conservative
