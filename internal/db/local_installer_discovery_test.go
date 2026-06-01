@@ -73,6 +73,24 @@ func TestSyncDiscoveredLocalInstallersMatchesArchitectureSuffix(t *testing.T) {
 	}
 }
 
+func TestSyncDiscoveredLocalInstallersMatchesVendorEditionNames(t *testing.T) {
+	d := testSQLiteDB(t)
+	rows, err := d.SyncDiscoveredLocalInstallers("HOST1", []map[string]any{{
+		"name": "RoboForm Enterprise", "version": "9.9.4", "path": `\\192.168.100.41\updater\RoboForm-v9.9.4-Enterprise.msi`,
+	}}, []map[string]any{{
+		"id": "SiberSystems.RoboForm", "name": "RoboForm 9-7-9-9 (All Users)", "version": "9.7.9.9",
+	}})
+	if err != nil {
+		t.Fatalf("sync discovered: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows=%v", rows)
+	}
+	if rows[0]["package_id"] != "SiberSystems.RoboForm" || rows[0]["available"] != "9.9.4" {
+		t.Fatalf("row=%v", rows[0])
+	}
+}
+
 func TestInstalledSoftwareForHostIncludesLocalInstallerCandidate(t *testing.T) {
 	d := testSQLiteDB(t)
 	host := "HOST1"

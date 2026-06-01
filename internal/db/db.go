@@ -2604,7 +2604,33 @@ func discoveredInstallerDisplayName(name, version string) string {
 func softwareNamesMatch(installed, discovered string) bool {
 	a := normalizeSoftwareName(installed)
 	b := normalizeSoftwareName(discovered)
-	return a != "" && b != "" && a == b
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	aw := strings.Fields(a)
+	bw := strings.Fields(b)
+	if len(aw) == 0 || len(bw) == 0 {
+		return false
+	}
+	if aw[0] != bw[0] {
+		return false
+	}
+	shorter, longer := aw, bw
+	if len(shorter) > len(longer) {
+		shorter, longer = longer, shorter
+	}
+	if len(shorter) < 1 || len(shorter) > 2 {
+		return false
+	}
+	for _, w := range shorter {
+		if !containsStringDB(longer, w) {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeSoftwareName(s string) string {
@@ -2616,14 +2642,45 @@ func normalizeSoftwareName(s string) string {
 	words := strings.Fields(repl.Replace(s))
 	out := words[:0]
 	for _, w := range words {
+		if looksLikeVersionToken(w) {
+			continue
+		}
 		switch w {
-		case "setup", "installer", "install", "windows", "win64", "win32", "x64", "x86", "x86-64", "x86_64", "64", "32", "amd64", "arm64", "aarch64":
+		case "setup", "installer", "install", "windows", "win64", "win32", "x64", "x86", "x86-64", "x86_64", "64", "32", "amd64", "arm64", "aarch64", "all", "users", "user", "enterprise", "business", "professional", "pro", "standard", "edition":
 			continue
 		default:
 			out = append(out, w)
 		}
 	}
 	return strings.Join(out, " ")
+}
+
+func containsStringDB(items []string, needle string) bool {
+	for _, item := range items {
+		if item == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeVersionToken(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	hasDigit := false
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			hasDigit = true
+			continue
+		}
+		if r == '.' || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return hasDigit
 }
 
 func compareLooseVersion(a, b string) int {

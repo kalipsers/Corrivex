@@ -55,6 +55,18 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.13.1 — Local installer name matching fix
+
+**Patch** — fixes SMB/local installers not attaching to versioned product
+names.
+
+- Local installer matching now ignores version-like words embedded in product
+  names, for example `RoboForm 9-7-9-9 (All Users)`.
+- Common edition suffixes such as `Enterprise`, `Business`, and `Pro` no
+  longer block a safe base-product match.
+- Adds a regression test for `RoboForm-v9.9.4-Enterprise.msi` matching
+  `SiberSystems.RoboForm`.
+
 ### 1.13.0 — Fleet update catalog and cascade updates
 
 **Minor** — adds a fleet-wide software update workflow.
