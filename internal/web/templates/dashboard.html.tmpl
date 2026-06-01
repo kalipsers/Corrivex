@@ -732,6 +732,22 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
 .fleet-host.is-done { border-color: #BBF7D0; background: #F0FDF4; }
 .fleet-host-title { font-weight: 600; color: var(--c-primary); }
 .fleet-host-meta { font-family: ui-monospace, monospace; font-size: 11px; color: var(--c-muted); }
+.fleet-action-list { display: grid; gap: 8px; }
+.fleet-action-row {
+  border: 1px solid var(--c-line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  background: var(--c-surface);
+}
+.fleet-action-row.is-running { border-color: #BFDBFE; background: #EFF6FF; }
+.fleet-action-row.is-failed { border-color: #FECACA; background: #FEF2F2; }
+.fleet-action-row.is-done { border-color: #BBF7D0; background: #F0FDF4; }
+.fleet-action-host { font-weight: 650; color: var(--c-primary); }
+.fleet-action-result { grid-column: 1 / -1; font-size: 12px; color: var(--c-muted); font-family: ui-monospace, monospace; word-break: break-word; }
 
 /* Key-value list */
 .kv { display: grid; grid-template-columns: 140px 1fr; gap: 6px 16px; font-size: 13px; }
@@ -900,6 +916,12 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
         </select>
       </div>
       <div class="toolbar-right">
+        <button class="btn btn-primary" data-action="fleet-upgrade-all" title="Queue winget upgrade-all on every device">
+          Update all winget
+        </button>
+        <button class="btn btn-cta-outline" data-action="fleet-wu-install-all" title="Queue Windows Update install-all on every device">
+          Update all Windows
+        </button>
         <button class="btn" onclick="location.reload()">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
           Refresh
@@ -948,8 +970,6 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
               <td>
                 <div class="row-actions">
                   <button class="btn btn-sm" data-action="view" data-host="{{.Hostname}}" title="Open details">Details</button>
-                  <button class="btn btn-sm btn-primary" data-action="upgrade-all" data-host="{{.Hostname}}" title="Open live status and update all winget packages">Update all winget</button>
-                  <button class="btn btn-sm btn-cta-outline" data-action="wu-install-all" data-host="{{.Hostname}}" title="Open live status and install all pending Windows updates">Update all Windows</button>
                 </div>
               </td>
             </tr>
@@ -1408,6 +1428,33 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
   </div>
 </div>
 
+<!-- Fleet update-all modal -->
+<div class="modal-backdrop" id="fleet-action-modal" role="dialog" aria-modal="true" aria-labelledby="fleet-action-title" style="z-index:94">
+  <div class="modal" style="max-width:900px;width:min(90vw,900px)">
+    <div class="modal-hd">
+      <div>
+        <div class="modal-title" id="fleet-action-title">Fleet update</div>
+        <div class="modal-sub" id="fleet-action-sub"></div>
+      </div>
+      <button class="icon-btn" data-close-fleet-action title="Close">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-bd">
+      <section class="section">
+        <div class="section-hd">
+          <div class="section-title">Device status</div>
+        </div>
+        <div id="fleet-action-list"><div class="card-empty">Preparing…</div></div>
+      </section>
+    </div>
+    <div class="modal-ft">
+      <span class="sub" id="fleet-action-status" style="flex:1;font-size:12px"></span>
+      <button class="btn" data-close-fleet-action>Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- Cascade update modal -->
 <div class="modal-backdrop" id="cascade-modal" role="dialog" aria-modal="true" aria-labelledby="cascade-modal-title" style="z-index:94">
   <div class="modal" style="max-width:1050px;width:min(90vw,1050px)">
@@ -1677,6 +1724,12 @@ if (cascadeModal) {
     if (e.target === cascadeModal || e.target.closest('[data-close-cascade]')) closeCascadeModal();
   });
 }
+const fleetActionModal = document.getElementById('fleet-action-modal');
+if (fleetActionModal) {
+  fleetActionModal.addEventListener('click', e => {
+    if (e.target === fleetActionModal || e.target.closest('[data-close-fleet-action]')) closeFleetActionModal();
+  });
+}
 document.addEventListener('click', e => {
   if (e.target.closest('#open-security-btn')) { e.preventDefault(); openSecurityModal(); }
   if (e.target.closest('#rescan-cves-btn')) { e.preventDefault(); triggerCVERescan(); }
@@ -1689,6 +1742,7 @@ if (cveFilterEl) cveFilterEl.addEventListener('input', applyCVEFilter);
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   if (securityModal && securityModal.classList.contains('is-open')) { closeSecurityModal(); return; }
+  if (fleetActionModal && fleetActionModal.classList.contains('is-open')) { closeFleetActionModal(); return; }
   if (cascadeModal && cascadeModal.classList.contains('is-open')) { closeCascadeModal(); return; }
   closeModal();
 });
@@ -2587,6 +2641,7 @@ function handleWsEvent(ev) {
     }
   } else if (ev.type === 'task' && ev.data) {
     resolveCascadeWaiter(ev.data);
+    updateFleetActionFromTask(ev.data);
     const modalTitle = document.getElementById('device-modal-title');
     const open = modal.classList.contains('is-open') && modalTitle && modalTitle.textContent === ev.data.hostname;
     if (open) {
@@ -2624,6 +2679,7 @@ function handleWsEvent(ev) {
       // drops any package that's no longer pending. Nothing more to do here.
     }
   } else if (ev.type === 'task_progress' && ev.data) {
+    updateFleetActionFromProgress(ev.data);
     const modalTitle = document.getElementById('device-modal-title');
     const open = modal.classList.contains('is-open') && modalTitle && modalTitle.textContent === ev.data.hostname;
     if (open && ev.data.package_id) {
@@ -2757,6 +2813,167 @@ function closeCascadeModal() {
   if (!cascadeModal) return;
   cascadeModal.classList.remove('is-open');
   if (!document.querySelector('.modal-backdrop.is-open')) document.body.style.overflow = '';
+}
+
+window.__fleetAction = null;
+
+function collectFleetHosts() {
+  const seen = new Set();
+  return Array.from(document.querySelectorAll('#device-table tbody tr[data-host]'))
+    .map(tr => {
+      const host = (tr.dataset.host || '').trim();
+      if (!host || seen.has(host.toLowerCase())) return null;
+      seen.add(host.toLowerCase());
+      return {
+        hostname: host,
+        online: tr.dataset.online === '1',
+      };
+    })
+    .filter(Boolean);
+}
+
+function openFleetActionModal(kind) {
+  const taskType = kind === 'windows' ? 'windows_update_all' : 'upgrade_all';
+  const title = kind === 'windows' ? 'Update all Windows' : 'Update all winget';
+  const hosts = collectFleetHosts();
+  window.__fleetAction = {
+    kind,
+    taskType,
+    hosts: new Map(hosts.map(h => [h.hostname.toLowerCase(), {
+      hostname: h.hostname,
+      online: h.online,
+      status: 'waiting',
+      taskID: null,
+      result: '',
+    }])),
+    taskToHost: new Map(),
+  };
+  document.getElementById('fleet-action-title').textContent = title;
+  document.getElementById('fleet-action-sub').textContent = hosts.length + ' device(s)';
+  if (fleetActionModal) {
+    fleetActionModal.classList.add('is-open');
+    document.body.style.overflow = 'hidden';
+  }
+  renderFleetActionModal();
+  queueFleetActionTasks();
+}
+
+function closeFleetActionModal() {
+  if (fleetActionModal) fleetActionModal.classList.remove('is-open');
+  if (!document.querySelector('.modal-backdrop.is-open')) document.body.style.overflow = '';
+}
+
+function normalizeTaskStatus(status) {
+  if (status === 'delivered') return 'running';
+  if (status === 'pending') return 'queued';
+  return status || 'queued';
+}
+
+function fleetStatusClass(status) {
+  if (status === 'completed') return 'is-done';
+  if (status === 'failed' || status === 'timeout') return 'is-failed';
+  if (status === 'running' || status === 'delivered') return 'is-running';
+  return '';
+}
+
+function fleetStatusKind(status) {
+  if (status === 'completed') return 'ok';
+  if (status === 'failed' || status === 'timeout') return 'danger';
+  if (status === 'running') return 'info';
+  if (status === 'queued' || status === 'waiting') return 'warn';
+  return 'muted';
+}
+
+function renderFleetActionModal() {
+  const state = window.__fleetAction;
+  const list = document.getElementById('fleet-action-list');
+  const statusEl = document.getElementById('fleet-action-status');
+  if (!state || !list || !statusEl) return;
+  const hosts = Array.from(state.hosts.values());
+  if (!hosts.length) {
+    list.innerHTML = '<div class="card-empty">No devices found.</div>';
+    statusEl.textContent = '';
+    return;
+  }
+  let done = 0, failed = 0, running = 0, queued = 0;
+  let html = '<div class="fleet-action-list">';
+  for (const h of hosts) {
+    const status = h.status || 'waiting';
+    if (status === 'completed') done++;
+    else if (status === 'failed' || status === 'timeout') failed++;
+    else if (status === 'running') running++;
+    else queued++;
+    html += '<div class="fleet-action-row ' + fleetStatusClass(status) + '" data-fleet-action-host="' + escapeHTML(h.hostname) + '">';
+    html += '<div><div class="fleet-action-host">' + escapeHTML(h.hostname) + ' ' + (h.online ? '<span class="chip online"><span class="dot"></span>online</span>' : '<span class="chip offline"><span class="dot"></span>offline</span>') + '</div>';
+    html += '<div class="fleet-host-meta">' + (h.taskID ? ('task #' + h.taskID) : 'not queued yet') + '</div></div>';
+    html += '<span class="chip ' + fleetStatusKind(status) + '"><span class="dot"></span>' + escapeHTML(status) + '</span>';
+    if (h.result) html += '<div class="fleet-action-result">' + escapeHTML(h.result) + '</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+  list.innerHTML = html;
+  statusEl.textContent = done + ' completed, ' + failed + ' failed, ' + running + ' running, ' + queued + ' queued/waiting';
+}
+
+async function queueFleetActionTasks() {
+  const state = window.__fleetAction;
+  if (!state) return;
+  let ok = 0, fail = 0;
+  for (const hostState of state.hosts.values()) {
+    hostState.status = 'queued';
+    hostState.result = '';
+    renderFleetActionModal();
+    try {
+      const created = await createTaskQuiet({ hostname: hostState.hostname, type: state.taskType });
+      hostState.taskID = created.task_id || null;
+      if (hostState.taskID) state.taskToHost.set(String(hostState.taskID), hostState.hostname.toLowerCase());
+      hostState.status = hostState.online ? 'running' : 'queued';
+      ok++;
+      renderFleetActionModal();
+    } catch (err) {
+      hostState.status = 'failed';
+      hostState.result = err.message || 'queue failed';
+      fail++;
+      renderFleetActionModal();
+    }
+  }
+  toast(ok + ' fleet task(s) queued' + (fail ? (', ' + fail + ' failed') : ''), fail ? 'warn' : 'ok');
+}
+
+function updateFleetActionFromTask(task) {
+  const state = window.__fleetAction;
+  if (!state || !task || task.type !== state.taskType) return;
+  let hostKey = '';
+  if (task.task_id && state.taskToHost.has(String(task.task_id))) {
+    hostKey = state.taskToHost.get(String(task.task_id));
+  } else if (task.hostname) {
+    hostKey = String(task.hostname).toLowerCase();
+  }
+  const hostState = state.hosts.get(hostKey);
+  if (!hostState) return;
+  if (task.task_id) {
+    hostState.taskID = task.task_id;
+    state.taskToHost.set(String(task.task_id), hostKey);
+  }
+  hostState.status = normalizeTaskStatus(task.status);
+  hostState.result = task.result || hostState.result || '';
+  renderFleetActionModal();
+}
+
+function updateFleetActionFromProgress(progress) {
+  const state = window.__fleetAction;
+  if (!state || !progress || !progress.hostname) return;
+  let hostKey = String(progress.hostname).toLowerCase();
+  if (progress.task_id) {
+    if (!state.taskToHost.has(String(progress.task_id))) return;
+    hostKey = state.taskToHost.get(String(progress.task_id));
+  }
+  const hostState = state.hosts.get(hostKey);
+  if (!hostState) return;
+  hostState.status = progress.status === 'timeout' ? 'timeout' : 'running';
+  const detail = progress.package_name || progress.package_id || '';
+  hostState.result = detail ? (detail + ' -> ' + progress.status) : (progress.status || '');
+  renderFleetActionModal();
 }
 
 function selectedCascadeHosts() {
@@ -2990,8 +3207,6 @@ function renderRowCells(pc) {
     '<td>' + statusChip + '</td>' +
     '<td><div class="row-actions">' +
       '<button class="btn btn-sm" data-action="view" data-host="' + host + '" title="Open details">Details</button>' +
-      '<button class="btn btn-sm btn-primary" data-action="upgrade-all" data-host="' + host + '" title="Open live status and update all winget packages">Update all winget</button>' +
-      '<button class="btn btn-sm btn-cta-outline" data-action="wu-install-all" data-host="' + host + '" title="Open live status and install all pending Windows updates">Update all Windows</button>' +
     '</div></td>';
 }
 
@@ -3488,6 +3703,8 @@ document.addEventListener('click', async (e) => {
   e.stopPropagation();
   const a = btn.dataset.action;
   if (a === 'open-cascade') return openCascadeModal(btn.dataset.key);
+  if (a === 'fleet-upgrade-all') return openFleetActionModal('winget');
+  if (a === 'fleet-wu-install-all') return openFleetActionModal('windows');
   if (a === 'view') return viewDevice(btn.dataset.host);
   if (a === 'upgrade-all') {
     const host = btn.dataset.host;

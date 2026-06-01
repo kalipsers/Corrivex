@@ -55,6 +55,14 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.14.1 - Fleet update-all buttons
+
+**Patch** - corrects the device update shortcut placement.
+
+- Removes per-device update-all buttons from the Devices table rows.
+- Adds top-level **Update all winget** and **Update all Windows** buttons for the whole device list.
+- Opens a fleet status modal that queues one task per device and tracks queued/running/completed/failed state from live task events.
+
 ### 1.14.0 - Device update shortcuts
 
 **Minor** - adds direct per-device update actions with live status.
