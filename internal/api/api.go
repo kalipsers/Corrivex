@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -177,6 +178,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.hostTasks(w, r)
 	case method == "GET" && action == "installed_software":
 		s.installedSoftware(w, r)
+	case method == "GET" && action == "fleet_updates":
+		s.fleetUpdates(w, r)
 	case method == "GET" && action == "software_history":
 		s.softwareHistory(w, r)
 	case method == "GET" && action == "cve_findings":
@@ -1328,6 +1331,162 @@ func (s *Server) installedSoftware(w http.ResponseWriter, r *http.Request) {
 		rows = []db.InstalledSoftware{}
 	}
 	writeJSON(w, 200, rows)
+}
+
+type fleetUpdateHost struct {
+	Hostname         string `json:"hostname"`
+	Domain           string `json:"domain,omitempty"`
+	InstalledVersion string `json:"installed_version"`
+	AvailableVersion string `json:"available_version"`
+	Source           string `json:"source"`
+	TaskType         string `json:"task_type"`
+	TaskPackageID    string `json:"task_package_id"`
+	PackageID        string `json:"package_id"`
+	PackageName      string `json:"package_name"`
+	Online           bool   `json:"online"`
+}
+
+type fleetUpdateGroup struct {
+	Key              string            `json:"key"`
+	Name             string            `json:"name"`
+	Source           string            `json:"source"`
+	PackageID        string            `json:"package_id"`
+	AvailableVersion string            `json:"available_version"`
+	Hosts            []fleetUpdateHost `json:"hosts"`
+	HostCount        int               `json:"host_count"`
+}
+
+func (s *Server) fleetUpdates(w http.ResponseWriter, r *http.Request) {
+	pcs, err := s.DB.AllPCs("")
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	online := map[string]bool{}
+	if s.Hub != nil {
+		online = s.Hub.OnlineHosts()
+	}
+	groups := map[string]*fleetUpdateGroup{}
+	seenHostTask := map[string]bool{}
+	add := func(h fleetUpdateHost) {
+		if h.Hostname == "" || h.TaskType == "" || h.TaskPackageID == "" {
+			return
+		}
+		key := strings.ToLower(h.Source + "|" + h.PackageID + "|" + h.PackageName + "|" + h.AvailableVersion)
+		g := groups[key]
+		if g == nil {
+			g = &fleetUpdateGroup{
+				Key:              key,
+				Name:             h.PackageName,
+				Source:           h.Source,
+				PackageID:        h.PackageID,
+				AvailableVersion: h.AvailableVersion,
+			}
+			groups[key] = g
+		}
+		g.Hosts = append(g.Hosts, h)
+		seenHostTask[strings.ToLower(h.Hostname+"|"+h.TaskType+"|"+h.TaskPackageID)] = true
+	}
+	for _, pc := range pcs {
+		var domain string
+		if pc.Domain != nil {
+			domain = *pc.Domain
+		}
+		var pkgs []map[string]any
+		if len(pc.LastPackages) > 0 {
+			_ = json.Unmarshal(pc.LastPackages, &pkgs)
+		}
+		for _, p := range pkgs {
+			src := stringFromAnyAPI(p["source"])
+			if src == "" {
+				src = "winget"
+			}
+			taskType := "upgrade_package"
+			taskPackageID := stringFromAnyAPI(p["id"])
+			packageID := taskPackageID
+			if src == "local" {
+				taskType = "local_install"
+				packageID = firstNonEmptyAPI(stringFromAnyAPI(p["package_id"]), packageID)
+			}
+			add(fleetUpdateHost{
+				Hostname:         pc.Hostname,
+				Domain:           domain,
+				InstalledVersion: stringFromAnyAPI(p["version"]),
+				AvailableVersion: stringFromAnyAPI(p["available"]),
+				Source:           src,
+				TaskType:         taskType,
+				TaskPackageID:    taskPackageID,
+				PackageID:        packageID,
+				PackageName:      firstNonEmptyAPI(stringFromAnyAPI(p["name"]), packageID),
+				Online:           online[pc.Hostname],
+			})
+		}
+	}
+	installed, err := s.DB.AllInstalledSoftware()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	for _, row := range installed {
+		if row.LocalInstallerID == 0 {
+			continue
+		}
+		taskID := strconv.FormatInt(row.LocalInstallerID, 10)
+		if seenHostTask[strings.ToLower(row.Hostname+"|local_install|"+taskID)] {
+			continue
+		}
+		add(fleetUpdateHost{
+			Hostname:         row.Hostname,
+			InstalledVersion: row.Version,
+			AvailableVersion: row.LocalInstallerVersion,
+			Source:           "local",
+			TaskType:         "local_install",
+			TaskPackageID:    taskID,
+			PackageID:        row.PackageID,
+			PackageName:      row.PackageName,
+			Online:           online[row.Hostname],
+		})
+	}
+	out := make([]fleetUpdateGroup, 0, len(groups))
+	for _, g := range groups {
+		sort.Slice(g.Hosts, func(i, j int) bool {
+			if g.Hosts[i].Online != g.Hosts[j].Online {
+				return g.Hosts[i].Online
+			}
+			return strings.ToLower(g.Hosts[i].Hostname) < strings.ToLower(g.Hosts[j].Hostname)
+		})
+		g.HostCount = len(g.Hosts)
+		out = append(out, *g)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].HostCount != out[j].HostCount {
+			return out[i].HostCount > out[j].HostCount
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	writeJSON(w, 200, out)
+}
+
+func stringFromAnyAPI(v any) string {
+	switch x := v.(type) {
+	case string:
+		return strings.TrimSpace(x)
+	case fmt.Stringer:
+		return strings.TrimSpace(x.String())
+	case nil:
+		return ""
+	default:
+		return strings.TrimSpace(fmt.Sprint(x))
+	}
+}
+
+func firstNonEmptyAPI(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // softwareHistory returns version-change audit entries for one (host, package).

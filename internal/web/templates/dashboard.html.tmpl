@@ -710,6 +710,29 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
   padding: 20px; text-align: center; color: var(--c-muted); font-size: 12px;
 }
 
+/* Fleet updates */
+.fleet-updates { display: grid; gap: 10px; }
+.fleet-update {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 12px; align-items: center;
+  padding: 12px 14px; border: 1px solid var(--c-border); border-radius: var(--r-md);
+  background: var(--c-surface);
+}
+.fleet-update-title { font-weight: 650; color: var(--c-primary); }
+.fleet-update-meta { margin-top: 3px; font-family: ui-monospace, monospace; font-size: 11px; color: var(--c-muted); word-break: break-all; }
+.fleet-hosts { display: grid; gap: 6px; }
+.fleet-host {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 10px; align-items: center;
+  padding: 8px 10px; border: 1px solid var(--c-border); border-radius: var(--r-sm);
+  background: var(--c-bg);
+}
+.fleet-host.is-running { border-color: #BFDBFE; background: #EFF6FF; }
+.fleet-host.is-failed { border-color: #FECACA; background: #FEF2F2; }
+.fleet-host.is-done { border-color: #BBF7D0; background: #F0FDF4; }
+.fleet-host-title { font-weight: 600; color: var(--c-primary); }
+.fleet-host-meta { font-family: ui-monospace, monospace; font-size: 11px; color: var(--c-muted); }
+
 /* Key-value list */
 .kv { display: grid; grid-template-columns: 140px 1fr; gap: 6px 16px; font-size: 13px; }
 .kv dt { color: var(--c-muted); font-weight: 500; }
@@ -834,6 +857,10 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
       Devices
     </button>
+    <button class="tab" data-tab="updates" role="tab" aria-selected="false">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+      Updates
+    </button>
     <button class="tab" data-tab="domains" role="tab" aria-selected="false">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"/><path d="M2 12h20"/></svg>
       Allowed domains
@@ -937,6 +964,37 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
             {{end}}
           </tbody>
         </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Fleet updates panel -->
+  <section class="tab-panel" id="panel-updates" role="tabpanel">
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <input type="search" class="input" id="fleet-update-search" placeholder="Search software, package id, source" aria-label="Search updates">
+        <select class="input" id="fleet-update-source" aria-label="Filter update source" style="min-width:160px">
+          <option value="">All sources</option>
+          <option value="winget">Winget</option>
+          <option value="local">SMB/local installer</option>
+        </select>
+      </div>
+      <div class="toolbar-right">
+        <button class="btn" id="refresh-fleet-updates-btn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+          Refresh
+        </button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-hd">
+        <div>
+          <div class="card-title">Available software updates</div>
+          <div class="sub" style="font-size:12px">Fleet-wide view of winget and SMB/local installer updates. Open one software item to cascade it host by host.</div>
+        </div>
+      </div>
+      <div class="card-bd">
+        <div id="fleet-updates-list"><div class="card-empty">Open the tab to load updates.</div></div>
       </div>
     </div>
   </section>
@@ -1349,6 +1407,38 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
   </div>
 </div>
 
+<!-- Cascade update modal -->
+<div class="modal-backdrop" id="cascade-modal" role="dialog" aria-modal="true" aria-labelledby="cascade-modal-title" style="z-index:94">
+  <div class="modal" style="max-width:1050px;width:min(90vw,1050px)">
+    <div class="modal-hd">
+      <div>
+        <div class="modal-title" id="cascade-modal-title">Cascade update</div>
+        <div class="modal-sub" id="cascade-modal-sub"></div>
+      </div>
+      <button class="icon-btn" data-close-cascade title="Close">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-bd">
+      <section class="section">
+        <div class="section-hd">
+          <div class="section-title">Hosts with this software</div>
+          <div style="display:inline-flex;gap:6px;margin-left:auto">
+            <button class="btn btn-sm btn-ghost" id="cascade-select-online">Select online</button>
+            <button class="btn btn-sm btn-ghost" id="cascade-clear">Clear</button>
+          </div>
+        </div>
+        <div id="cascade-host-list"><div class="card-empty">Loading…</div></div>
+      </section>
+    </div>
+    <div class="modal-ft">
+      <span class="sub" id="cascade-status" style="flex:1;font-size:12px"></span>
+      <button class="btn btn-primary" id="cascade-run-btn">Run cascade</button>
+      <button class="btn" data-close-cascade>Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- Profile / 2FA modal -->
 <div class="modal-backdrop" id="profile-modal" role="dialog" aria-modal="true">
   <div class="modal" style="max-width:600px">
@@ -1494,6 +1584,7 @@ document.querySelectorAll('.tab').forEach(t => {
     document.querySelectorAll('.tab-panel').forEach(x => x.classList.remove('is-active'));
     t.classList.add('is-active'); t.setAttribute('aria-selected','true');
     document.getElementById('panel-' + t.dataset.tab).classList.add('is-active');
+    if (t.dataset.tab === 'updates') loadFleetUpdates();
   });
 });
 
@@ -1579,6 +1670,12 @@ if (securityModal) {
     if (e.target === securityModal || e.target.closest('[data-close-security]')) closeSecurityModal();
   });
 }
+const cascadeModal = document.getElementById('cascade-modal');
+if (cascadeModal) {
+  cascadeModal.addEventListener('click', e => {
+    if (e.target === cascadeModal || e.target.closest('[data-close-cascade]')) closeCascadeModal();
+  });
+}
 document.addEventListener('click', e => {
   if (e.target.closest('#open-security-btn')) { e.preventDefault(); openSecurityModal(); }
   if (e.target.closest('#rescan-cves-btn')) { e.preventDefault(); triggerCVERescan(); }
@@ -1591,6 +1688,7 @@ if (cveFilterEl) cveFilterEl.addEventListener('input', applyCVEFilter);
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   if (securityModal && securityModal.classList.contains('is-open')) { closeSecurityModal(); return; }
+  if (cascadeModal && cascadeModal.classList.contains('is-open')) { closeCascadeModal(); return; }
   closeModal();
 });
 
@@ -2460,12 +2558,16 @@ function handleWsEvent(ev) {
   if (ev.type === 'hello') return;
   if (ev.type === 'pc' && ev.data) {
     renderOrUpdateRow(ev.data);
+    if (document.getElementById('panel-updates')?.classList.contains('is-active')) {
+      loadFleetUpdates(true);
+    }
     // if modal is open for this host, soft-refresh its body
     const modalTitle = document.getElementById('device-modal-title');
     if (modal.classList.contains('is-open') && modalTitle && modalTitle.textContent === ev.data.hostname) {
       renderDeviceModal(ev.data);
     }
   } else if (ev.type === 'task' && ev.data) {
+    resolveCascadeWaiter(ev.data);
     const modalTitle = document.getElementById('device-modal-title');
     const open = modal.classList.contains('is-open') && modalTitle && modalTitle.textContent === ev.data.hostname;
     if (open) {
@@ -2553,6 +2655,173 @@ connectWS();
 // Populate the fleet-wide CVE badge once at page load; further updates
 // arrive via the 'cve_scan_done' WS event above.
 loadCVEBadge();
+
+// ---- Fleet updates / cascade --------------------------------------------
+window.__fleetUpdates = [];
+window.__fleetUpdateByKey = {};
+const cascadeWaiters = new Map();
+
+async function loadFleetUpdates(force = false) {
+  const wrap = document.getElementById('fleet-updates-list');
+  if (!wrap) return;
+  if (!force && wrap.dataset.loaded === '1') return;
+  wrap.dataset.loaded = '1';
+  wrap.innerHTML = '<div class="card-empty">Loading updates…</div>';
+  try {
+    const res = await fetch(API + '?action=fleet_updates', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const list = await res.json();
+    window.__fleetUpdates = Array.isArray(list) ? list : [];
+    window.__fleetUpdateByKey = {};
+    for (const g of window.__fleetUpdates) window.__fleetUpdateByKey[g.key] = g;
+    renderFleetUpdates();
+  } catch (err) {
+    wrap.innerHTML = '<div class="banner is-err">Could not load updates: ' + escapeHTML(err.message) + '</div>';
+  }
+}
+
+function renderFleetUpdates() {
+  const wrap = document.getElementById('fleet-updates-list');
+  if (!wrap) return;
+  const q = (document.getElementById('fleet-update-search')?.value || '').toLowerCase();
+  const src = (document.getElementById('fleet-update-source')?.value || '').toLowerCase();
+  const filtered = (window.__fleetUpdates || []).filter(g => {
+    const text = ((g.name || '') + ' ' + (g.package_id || '') + ' ' + (g.source || '') + ' ' + (g.available_version || '')).toLowerCase();
+    return (!q || text.includes(q)) && (!src || (g.source || '').toLowerCase() === src);
+  });
+  if (!filtered.length) {
+    wrap.innerHTML = '<div class="card-empty">No available software updates found.</div>';
+    return;
+  }
+  let html = '<div class="fleet-updates">';
+  for (const g of filtered) {
+    const onlineCount = (g.hosts || []).filter(h => h.online).length;
+    html += '<div class="fleet-update" data-fleet-update="' + escapeHTML(g.key) + '">';
+    html += '<div><div class="fleet-update-title">' + escapeHTML(g.name || g.package_id || '?') + '</div>';
+    html += '<div class="fleet-update-meta">' + escapeHTML(g.package_id || '') + '</div></div>';
+    html += '<span class="chip ' + ((g.source || '') === 'local' ? 'ok' : 'info') + '">' + escapeHTML((g.source || 'winget') === 'local' ? 'SMB/local' : g.source || 'winget') + '</span>';
+    html += '<span class="pkg-v"><strong>' + escapeHTML(g.available_version || '?') + '</strong></span>';
+    html += '<button class="btn btn-sm btn-primary" data-action="open-cascade" data-key="' + escapeHTML(g.key) + '">' + onlineCount + '/' + (g.host_count || 0) + ' online</button>';
+    html += '</div>';
+  }
+  html += '</div>';
+  wrap.innerHTML = html;
+}
+
+function openCascadeModal(key) {
+  const g = window.__fleetUpdateByKey[key];
+  if (!g || !cascadeModal) return;
+  cascadeModal.dataset.key = key;
+  document.getElementById('cascade-modal-title').textContent = g.name || g.package_id || 'Cascade update';
+  document.getElementById('cascade-modal-sub').textContent = (g.source === 'local' ? 'SMB/local installer' : (g.source || 'winget')) + ' -> ' + (g.available_version || '?') + ' on ' + (g.host_count || 0) + ' host(s)';
+  document.getElementById('cascade-status').textContent = '';
+  const list = document.getElementById('cascade-host-list');
+  let html = '<div class="fleet-hosts">';
+  for (const h of (g.hosts || [])) {
+    const checked = h.online ? ' checked' : '';
+    const disabled = h.online ? '' : ' disabled';
+    html += '<label class="fleet-host" data-cascade-host="' + escapeHTML(h.hostname) + '">';
+    html += '<input type="checkbox" class="cascade-check" data-host="' + escapeHTML(h.hostname) + '"' + checked + disabled + '>';
+    html += '<div><div class="fleet-host-title">' + escapeHTML(h.hostname) + ' ' + (h.online ? '<span class="chip online"><span class="dot"></span>online</span>' : '<span class="chip offline"><span class="dot"></span>offline</span>') + '</div>';
+    html += '<div class="fleet-host-meta">' + escapeHTML(h.package_id || '') + '</div></div>';
+    html += '<span class="pkg-v">' + escapeHTML(h.installed_version || '?') + '</span>';
+    html += '<span class="pkg-arrow">-></span><span class="pkg-v"><strong>' + escapeHTML(h.available_version || '?') + '</strong></span>';
+    html += '</label>';
+  }
+  html += '</div>';
+  list.innerHTML = html;
+  cascadeModal.classList.add('is-open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeCascadeModal() {
+  if (!cascadeModal) return;
+  cascadeModal.classList.remove('is-open');
+  if (!document.querySelector('.modal-backdrop.is-open')) document.body.style.overflow = '';
+}
+
+function selectedCascadeHosts() {
+  const key = cascadeModal?.dataset.key || '';
+  const g = window.__fleetUpdateByKey[key];
+  if (!g) return [];
+  const selected = new Set(Array.from(document.querySelectorAll('#cascade-host-list .cascade-check:checked')).map(x => x.dataset.host));
+  return (g.hosts || []).filter(h => selected.has(h.hostname));
+}
+
+async function runCascadeUpdate() {
+  const hosts = selectedCascadeHosts();
+  const btn = document.getElementById('cascade-run-btn');
+  const status = document.getElementById('cascade-status');
+  if (!hosts.length) { toast('Select at least one online host', 'warn'); return; }
+  btn.disabled = true;
+  let done = 0;
+  for (const h of hosts) {
+    const row = document.querySelector('[data-cascade-host="' + cssEscape(h.hostname) + '"]');
+    row?.classList.remove('is-failed', 'is-done');
+    row?.classList.add('is-running');
+    status.textContent = 'Running ' + h.hostname + ' (' + (done + 1) + '/' + hosts.length + ')';
+    try {
+      const created = await createTaskQuiet({
+        hostname: h.hostname,
+        type: h.task_type,
+        package_id: h.task_package_id,
+        package_name: h.package_name,
+      });
+      const result = await waitForCascadeTask(created.task_id, 75 * 60 * 1000);
+      row?.classList.remove('is-running');
+      if (result.status === 'completed') {
+        row?.classList.add('is-done');
+      } else {
+        row?.classList.add('is-failed');
+        const cont = confirm(h.hostname + ' failed: ' + (result.result || result.status) + '\n\nContinue to the next machine?');
+        if (!cont) break;
+      }
+    } catch (err) {
+      row?.classList.remove('is-running');
+      row?.classList.add('is-failed');
+      const cont = confirm(h.hostname + ' did not finish: ' + err.message + '\n\nContinue to the next machine?');
+      if (!cont) break;
+    }
+    done++;
+  }
+  btn.disabled = false;
+  status.textContent = 'Cascade finished: ' + done + '/' + hosts.length + ' processed';
+  await loadFleetUpdates(true);
+}
+
+function waitForCascadeTask(taskID, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cascadeWaiters.delete(String(taskID));
+      reject(new Error('timeout waiting for task result'));
+    }, timeoutMs);
+    cascadeWaiters.set(String(taskID), {
+      resolve: (ev) => { clearTimeout(timeout); resolve(ev); },
+    });
+  });
+}
+
+function resolveCascadeWaiter(data) {
+  if (!data || !data.task_id) return;
+  const status = data.status || '';
+  if (status !== 'completed' && status !== 'failed' && status !== 'timeout') return;
+  const key = String(data.task_id);
+  const waiter = cascadeWaiters.get(key);
+  if (!waiter) return;
+  cascadeWaiters.delete(key);
+  waiter.resolve(data);
+}
+
+document.getElementById('fleet-update-search')?.addEventListener('input', renderFleetUpdates);
+document.getElementById('fleet-update-source')?.addEventListener('change', renderFleetUpdates);
+document.getElementById('refresh-fleet-updates-btn')?.addEventListener('click', () => loadFleetUpdates(true));
+document.getElementById('cascade-run-btn')?.addEventListener('click', runCascadeUpdate);
+document.getElementById('cascade-select-online')?.addEventListener('click', () => {
+  document.querySelectorAll('#cascade-host-list .cascade-check:not(:disabled)').forEach(b => b.checked = true);
+});
+document.getElementById('cascade-clear')?.addEventListener('click', () => {
+  document.querySelectorAll('#cascade-host-list .cascade-check').forEach(b => b.checked = false);
+});
 
 // ---- Reports tab ---------------------------------------------------------
 function populateReportsHostSelectors() {
@@ -3198,6 +3467,7 @@ document.addEventListener('click', async (e) => {
   }
   e.stopPropagation();
   const a = btn.dataset.action;
+  if (a === 'open-cascade') return openCascadeModal(btn.dataset.key);
   if (a === 'view') return viewDevice(btn.dataset.host);
   if (a === 'upgrade-all') {
     setAllUpgradeState('pending');

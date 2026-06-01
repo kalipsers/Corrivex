@@ -1094,6 +1094,9 @@ func (d *DB) StoreFullReport(r FullReport, clientIP string) ([]Task, error) {
 			r.Packages = append(r.Packages, localPkgs...)
 		}
 	}
+	if action == "full_report" && r.Packages != nil && r.InstalledSoftware != nil {
+		r.Packages = ReconcilePackageUpdates(r.Packages, r.InstalledSoftware)
+	}
 	if r.Packages != nil {
 		b, _ := json.Marshal(r.Packages)
 		s := string(b)
@@ -2495,6 +2498,67 @@ func (d *DB) SyncDiscoveredLocalInstallers(hostname string, installers, installe
 	return out, nil
 }
 
+// ReconcilePackageUpdates removes stale pending-update rows when the installed
+// software inventory already reports the same or a newer version. This catches
+// out-of-band installs and occasional winget cache lag after an upgrade.
+func ReconcilePackageUpdates(packages, installed []map[string]any) []map[string]any {
+	type instRow struct {
+		name, version string
+	}
+	byID := map[string]instRow{}
+	byName := map[string]instRow{}
+	for _, p := range installed {
+		id := stringFromAny(p["id"])
+		name := stringFromAny(p["name"])
+		version := stringFromAny(p["version"])
+		if version == "" || len(versionParts(version)) == 0 {
+			continue
+		}
+		row := instRow{name: name, version: version}
+		if id != "" {
+			byID[strings.ToLower(id)] = row
+		}
+		if name != "" {
+			byName[normalizeSoftwareName(name)] = row
+		}
+	}
+	out := make([]map[string]any, 0, len(packages))
+	seen := map[string]bool{}
+	for _, p := range packages {
+		name := stringFromAny(p["name"])
+		available := stringFromAny(p["available"])
+		if available == "" || len(versionParts(available)) == 0 {
+			out = append(out, p)
+			continue
+		}
+		id := stringFromAny(p["id"])
+		matchID := id
+		if stringFromAny(p["source"]) == "local" {
+			matchID = stringFromAny(p["package_id"])
+		}
+		var inst instRow
+		if matchID != "" {
+			inst = byID[strings.ToLower(matchID)]
+		}
+		if inst.version == "" && name != "" {
+			inst = byName[normalizeSoftwareName(name)]
+		}
+		if inst.version != "" {
+			if compareLooseVersion(inst.version, available) >= 0 {
+				continue
+			}
+			p["version"] = inst.version
+		}
+		key := strings.ToLower(stringFromAny(p["source"]) + "|" + matchID + "|" + id + "|" + available)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, p)
+	}
+	return out
+}
+
 func (d *DB) upsertDiscoveredLocalInstaller(li LocalInstaller) (int64, error) {
 	var existing int64
 	err := d.sql.QueryRow("SELECT id FROM local_installers WHERE path=?", li.Path).Scan(&existing)
@@ -2704,7 +2768,13 @@ func (d *DB) AllInstalledSoftware() ([]InstalledSoftware, error) {
 		s.Source = src.String
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := d.attachLocalInstallerCandidates(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // LocalAdminEntry is one (host, admin account) row for reports.

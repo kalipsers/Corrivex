@@ -55,6 +55,21 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.13.0 — Fleet update catalog and cascade updates
+
+**Minor** — adds a fleet-wide software update workflow.
+
+- Full reports now reconcile pending package rows against the installed
+  software inventory, so out-of-band installs remove stale update rows when
+  the installed version is already current or newer.
+- The dashboard adds an **Updates** tab listing all available software updates
+  across the fleet, including winget and SMB/local installer sources.
+- Clicking a software update opens a cascade modal showing every host with
+  that software, installed versions, available versions, and online state.
+- Cascade updates queue one host at a time and wait for completion before
+  moving to the next host; on failure or timeout, the operator is prompted to
+  continue or cancel.
+
 ### 1.12.1 — Local installer match visibility fix
 
 **Patch** — fixes discovered SMB installers not appearing for matching apps.

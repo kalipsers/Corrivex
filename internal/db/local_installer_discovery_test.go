@@ -99,6 +99,26 @@ func TestInstalledSoftwareForHostIncludesLocalInstallerCandidate(t *testing.T) {
 	}
 }
 
+func TestReconcilePackageUpdatesRemovesOutOfBandUpdatedPackage(t *testing.T) {
+	pkgs := []map[string]any{{
+		"id": "RustDesk.RustDesk", "name": "RustDesk", "version": "1.4.5", "available": "1.4.6",
+	}, {
+		"id": "Other.Tool", "name": "Other Tool", "version": "1.0.0", "available": "1.1.0",
+	}}
+	installed := []map[string]any{{
+		"id": "RustDesk.RustDesk", "name": "RustDesk", "version": "1.4.6",
+	}, {
+		"id": "Other.Tool", "name": "Other Tool", "version": "1.0.1",
+	}}
+	rows := ReconcilePackageUpdates(pkgs, installed)
+	if len(rows) != 1 {
+		t.Fatalf("rows=%v", rows)
+	}
+	if rows[0]["id"] != "Other.Tool" || rows[0]["version"] != "1.0.1" {
+		t.Fatalf("row=%v", rows[0])
+	}
+}
+
 func TestUNCPathHasRootRequiresBoundary(t *testing.T) {
 	if !uncPathHasRoot(`\\server\share\dir\file.msi`, `\\server\share`) {
 		t.Fatal("expected root match")
