@@ -266,7 +266,7 @@ a:hover { color: var(--c-cta-hover); text-decoration: underline; }
 .chip.muted { color: var(--c-muted); background: var(--c-bg); }
 .chip .dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
 
-.row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 
 /* OS column: allow wrapping so long captions like
    "Microsoft Windows 11 Pro for Workstations 10.0.26200" don't blow up the
@@ -948,7 +948,8 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
               <td>
                 <div class="row-actions">
                   <button class="btn btn-sm" data-action="view" data-host="{{.Hostname}}" title="Open details">Details</button>
-                  <button class="btn btn-sm btn-primary" data-action="upgrade-all" data-host="{{.Hostname}}" title="Queue upgrade-all">Upgrade all</button>
+                  <button class="btn btn-sm btn-primary" data-action="upgrade-all" data-host="{{.Hostname}}" title="Open live status and update all winget packages">Update all winget</button>
+                  <button class="btn btn-sm btn-cta-outline" data-action="wu-install-all" data-host="{{.Hostname}}" title="Open live status and install all pending Windows updates">Update all Windows</button>
                 </div>
               </td>
             </tr>
@@ -1714,9 +1715,31 @@ async function viewDevice(host) {
     const pc = await res.json();
     renderDeviceModal(pc);
     requestHostSync(host);
+    return true;
   } catch (e) {
     document.getElementById('device-modal-body').innerHTML = '<div class="banner is-err">Could not load device: ' + escapeHTML(e.message) + '</div>';
+    return false;
   }
+}
+
+async function ensureDeviceModalForAction(host, tab) {
+  const currentHost = document.getElementById('device-modal-title')?.textContent || '';
+  if (!modal.classList.contains('is-open') || currentHost !== host) {
+    const ok = await viewDevice(host);
+    if (!ok) return false;
+  }
+  setDeviceModalTab(tab);
+  return true;
+}
+
+function setDeviceModalTab(key) {
+  document.querySelectorAll('[data-modal-tab]').forEach(b => {
+    const active = b.dataset.modalTab === key;
+    b.classList.toggle('is-active', active);
+    b.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  document.querySelectorAll('[data-modal-panel]').forEach(p => p.classList.toggle('is-active', p.dataset.modalPanel === key));
+  if (key === 'installed') loadInstalledSoftware();
 }
 
 async function requestHostSync(host) {
@@ -1996,11 +2019,7 @@ function renderDeviceModal(pc) {
 function bindModalTabs() {
   document.querySelectorAll('[data-modal-tab]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const key = btn.dataset.modalTab;
-      document.querySelectorAll('[data-modal-tab]').forEach(b => b.classList.toggle('is-active', b.dataset.modalTab === key));
-      document.querySelectorAll('[data-modal-panel]').forEach(p => p.classList.toggle('is-active', p.dataset.modalPanel === key));
-      // Lazy-load installed software list the first time the tab opens.
-      if (key === 'installed') loadInstalledSoftware();
+      setDeviceModalTab(btn.dataset.modalTab);
     });
   });
   // Also auto-load if the tab was already active when modal opened.
@@ -2970,8 +2989,9 @@ function renderRowCells(pc) {
     '<td>' + updatesCell + '</td>' +
     '<td>' + statusChip + '</td>' +
     '<td><div class="row-actions">' +
-      '<button class="btn btn-sm" data-action="view" data-host="' + host + '">Details</button>' +
-      '<button class="btn btn-sm btn-primary" data-action="upgrade-all" data-host="' + host + '">Upgrade all</button>' +
+      '<button class="btn btn-sm" data-action="view" data-host="' + host + '" title="Open details">Details</button>' +
+      '<button class="btn btn-sm btn-primary" data-action="upgrade-all" data-host="' + host + '" title="Open live status and update all winget packages">Update all winget</button>' +
+      '<button class="btn btn-sm btn-cta-outline" data-action="wu-install-all" data-host="' + host + '" title="Open live status and install all pending Windows updates">Update all Windows</button>' +
     '</div></td>';
 }
 
@@ -3470,9 +3490,16 @@ document.addEventListener('click', async (e) => {
   if (a === 'open-cascade') return openCascadeModal(btn.dataset.key);
   if (a === 'view') return viewDevice(btn.dataset.host);
   if (a === 'upgrade-all') {
+    const host = btn.dataset.host;
+    if (btn.closest('#device-table') || !modal.classList.contains('is-open')) {
+      const ok = await ensureDeviceModalForAction(host, 'winget');
+      if (!ok) return;
+    } else {
+      setDeviceModalTab('winget');
+    }
     setAllUpgradeState('pending');
     popLogPane();
-    return createTask({ hostname: btn.dataset.host, type: 'upgrade_all' }, 'Upgrade queued');
+    return createTask({ hostname: host, type: 'upgrade_all' }, 'Winget update queued');
   }
   if (a === 'upgrade-one') {
     setPkgRowStatus(btn.dataset.id, 'pending');
@@ -3481,9 +3508,16 @@ document.addEventListener('click', async (e) => {
     return createTask({ hostname: btn.dataset.host, type: taskType, package_id: btn.dataset.id, package_name: btn.dataset.name }, taskType === 'local_install' ? 'Local installer queued' : 'Package upgrade queued');
   }
   if (a === 'wu-install-all') {
+    const host = btn.dataset.host;
+    if (btn.closest('#device-table') || !modal.classList.contains('is-open')) {
+      const ok = await ensureDeviceModalForAction(host, 'wu');
+      if (!ok) return;
+    } else {
+      setDeviceModalTab('wu');
+    }
     setWUAllState('pending');
     popLogPane();
-    return createTask({ hostname: btn.dataset.host, type: 'windows_update_all' }, 'Windows Update install queued');
+    return createTask({ hostname: host, type: 'windows_update_all' }, 'Windows Update install queued');
   }
   if (a === 'wu-install-one') {
     setWURowStatus(btn.dataset.id, 'pending');

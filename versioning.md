@@ -55,6 +55,14 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.14.0 - Device update shortcuts
+
+**Minor** - adds direct per-device update actions with live status.
+
+- Device rows now expose separate **Update all winget** and **Update all Windows** actions.
+- Starting either action from the device list opens the host modal on the matching tab before queuing the task, so live status and output are visible immediately.
+- Dynamically refreshed device rows use the same actions as the initial page render.
+
 ### 1.13.1 — Local installer name matching fix
 
 **Patch** — fixes SMB/local installers not attaching to versioned product
