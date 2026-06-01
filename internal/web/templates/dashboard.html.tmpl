@@ -664,7 +664,7 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
 /* Installed-software panel */
 .inst-list { display: flex; flex-direction: column; gap: 4px; }
 .inst {
-  display: grid; grid-template-columns: 1fr auto auto;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto;
   gap: 12px; align-items: center;
   padding: 8px 12px; border: 1px solid var(--c-border); border-radius: var(--r-md);
   background: var(--c-surface); font-size: 13px;
@@ -685,6 +685,7 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
   font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--c-muted);
 }
+.inst-local { white-space: nowrap; }
 
 .inst-history {
   grid-column: 1 / -1;
@@ -2267,7 +2268,13 @@ function renderInstalledList(list) {
     html += '<div><div class="inst-title">' + escapeHTML(name) + '</div><div class="inst-id">' + escapeHTML(id) + '</div></div>';
     html += '<span class="inst-version">' + escapeHTML(ver) + '</span>';
     html += '<span class="inst-source">' + escapeHTML(src) + cascadeChipHTML(it) + '</span>';
+    html += '<span class="inst-local">' + localInstallerChipHTML(it) + '</span>';
     html += '<span class="inst-vendor" data-vendor-chip></span>';
+    if (it.local_installer_id) {
+      html += '<button class="btn btn-sm btn-cta-outline" data-action="upgrade-one" data-task="local_install" data-host="' + escapeHTML(it.hostname) + '" data-id="' + escapeHTML(String(it.local_installer_id)) + '" data-name="' + escapeHTML(name) + '">Install</button>';
+    } else {
+      html += '<span></span>';
+    }
     html += '</div>';
   }
   html += '</div>';
@@ -2290,6 +2297,13 @@ function cascadeChipHTML(it) {
   return ' <span class="chip ' + cls + '" title="' + escapeHTML(tip) + '" style="margin-left:6px">' + escapeHTML(label) + '</span>';
 }
 
+function localInstallerChipHTML(it) {
+  if (!it.local_installer_id) return '';
+  const ver = it.local_installer_version || '?';
+  const tip = 'Detected local installer: ' + (it.local_installer_path || '');
+  return '<span class="chip ok" title="' + escapeHTML(tip) + '">local ' + escapeHTML(ver) + '</span>';
+}
+
 function applyInstalledFilter() {
   const q = (document.getElementById('installed-filter')?.value || '').toLowerCase();
   document.querySelectorAll('#installed-list .inst').forEach(row => {
@@ -2299,6 +2313,7 @@ function applyInstalledFilter() {
 
 // Click on an installed row → toggle history below it.
 document.addEventListener('click', async (e) => {
+  if (e.target.closest('button, a, input, select, textarea')) return;
   const row = e.target.closest('[data-inst-row]');
   if (!row) return;
   const open = row.classList.toggle('is-open');

@@ -55,6 +55,18 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.12.1 — Local installer match visibility fix
+
+**Patch** — fixes discovered SMB installers not appearing for matching apps.
+
+- Installer filename parsing now removes architecture suffix residue such as
+  `x86_64`, so `rustdesk-1.4.6-x86_64.msi` maps to `RustDesk` instead of
+  `rustdesk 64`.
+- Installed software rows now show a `local <version>` chip and **Install**
+  button when a newer discovered local installer is available for that app.
+- Local-installer matching also ignores common architecture tokens during
+  server-side name comparison.
+
 ### 1.12.0 — SMB share installer discovery
 
 **Minor** — configured SMB shares can now feed local installer updates.

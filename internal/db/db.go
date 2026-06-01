@@ -1453,16 +1453,19 @@ func (d *DB) PackageCacheSet(query string, results []byte) {
 
 // InstalledSoftware is the current snapshot row for one host+package pair.
 type InstalledSoftware struct {
-	Hostname      string    `json:"hostname"`
-	PackageID     string    `json:"id"`
-	PackageName   string    `json:"name"`
-	Version       string    `json:"version"`
-	Source        string    `json:"source"`
-	FirstSeen     time.Time `json:"first_seen"`
-	LastSeen      time.Time `json:"last_seen"`
-	CascadeState  string    `json:"cascade_state,omitempty"`  // "winget" | "vendor_only" | "unmanaged" | "unknown"
-	VendorLatest  string    `json:"vendor_latest,omitempty"`  // vendor cache's latest_version for this package_id (if known)
-	VendorChannel string    `json:"vendor_channel,omitempty"` // "stable" | "esr" | "lts" | ...
+	Hostname              string    `json:"hostname"`
+	PackageID             string    `json:"id"`
+	PackageName           string    `json:"name"`
+	Version               string    `json:"version"`
+	Source                string    `json:"source"`
+	FirstSeen             time.Time `json:"first_seen"`
+	LastSeen              time.Time `json:"last_seen"`
+	CascadeState          string    `json:"cascade_state,omitempty"`  // "winget" | "vendor_only" | "unmanaged" | "unknown"
+	VendorLatest          string    `json:"vendor_latest,omitempty"`  // vendor cache's latest_version for this package_id (if known)
+	VendorChannel         string    `json:"vendor_channel,omitempty"` // "stable" | "esr" | "lts" | ...
+	LocalInstallerID      int64     `json:"local_installer_id,omitempty"`
+	LocalInstallerVersion string    `json:"local_installer_version,omitempty"`
+	LocalInstallerPath    string    `json:"local_installer_path,omitempty"`
 }
 
 // SoftwareHistory is one entry in the append-only audit log for a (host,
@@ -1619,7 +1622,41 @@ func (d *DB) InstalledSoftwareForHost(hostname string) ([]InstalledSoftware, err
 		s.Source = src.String
 		out = append(out, s)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := d.attachLocalInstallerCandidates(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (d *DB) attachLocalInstallerCandidates(rows []InstalledSoftware) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	installers, err := d.ListLocalInstallers()
+	if err != nil {
+		return err
+	}
+	for i := range rows {
+		for _, li := range installers {
+			name := firstNonEmptyDB(li.DiscoveredName, li.Name)
+			version := li.DiscoveredVersion
+			if name == "" || version == "" || len(versionParts(version)) == 0 {
+				continue
+			}
+			if !softwareNamesMatch(rows[i].PackageName, name) || compareLooseVersion(version, rows[i].Version) <= 0 {
+				continue
+			}
+			if rows[i].LocalInstallerID == 0 || compareLooseVersion(version, rows[i].LocalInstallerVersion) > 0 {
+				rows[i].LocalInstallerID = li.ID
+				rows[i].LocalInstallerVersion = version
+				rows[i].LocalInstallerPath = li.Path
+			}
+		}
+	}
+	return nil
 }
 
 // SoftwareHistoryForHost returns the history for one (host, package),
@@ -2516,7 +2553,7 @@ func normalizeSoftwareName(s string) string {
 	out := words[:0]
 	for _, w := range words {
 		switch w {
-		case "setup", "installer", "install", "windows", "win64", "win32", "x64", "x86", "amd64":
+		case "setup", "installer", "install", "windows", "win64", "win32", "x64", "x86", "x86-64", "x86_64", "64", "32", "amd64", "arm64", "aarch64":
 			continue
 		default:
 			out = append(out, w)

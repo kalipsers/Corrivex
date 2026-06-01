@@ -55,6 +55,50 @@ func TestSyncDiscoveredLocalInstallersSkipsOlderVersions(t *testing.T) {
 	}
 }
 
+func TestSyncDiscoveredLocalInstallersMatchesArchitectureSuffix(t *testing.T) {
+	d := testSQLiteDB(t)
+	rows, err := d.SyncDiscoveredLocalInstallers("HOST1", []map[string]any{{
+		"name": "rustdesk 64", "version": "1.4.6", "path": `\\192.168.100.41\updater\rustdesk-1.4.6-x86_64.msi`,
+	}}, []map[string]any{{
+		"id": "reg:RustDesk", "name": "RustDesk", "version": "1.4.5.29466336",
+	}})
+	if err != nil {
+		t.Fatalf("sync discovered: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows=%v", rows)
+	}
+	if rows[0]["package_id"] != "reg:RustDesk" || rows[0]["available"] != "1.4.6" {
+		t.Fatalf("row=%v", rows[0])
+	}
+}
+
+func TestInstalledSoftwareForHostIncludesLocalInstallerCandidate(t *testing.T) {
+	d := testSQLiteDB(t)
+	host := "HOST1"
+	installed := []map[string]any{{
+		"id": "reg:RustDesk", "name": "RustDesk", "version": "1.4.5.29466336", "source": "registry",
+	}}
+	if err := d.SyncInstalledSoftware(host, installed); err != nil {
+		t.Fatalf("sync installed: %v", err)
+	}
+	if _, err := d.SyncDiscoveredLocalInstallers(host, []map[string]any{{
+		"name": "rustdesk 64", "version": "1.4.6", "path": `\\192.168.100.41\updater\rustdesk-1.4.6-x86_64.msi`,
+	}}, installed); err != nil {
+		t.Fatalf("sync discovered: %v", err)
+	}
+	rows, err := d.InstalledSoftwareForHost(host)
+	if err != nil {
+		t.Fatalf("installed software: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows=%+v", rows)
+	}
+	if rows[0].LocalInstallerID == 0 || rows[0].LocalInstallerVersion != "1.4.6" {
+		t.Fatalf("missing local installer candidate: %+v", rows[0])
+	}
+}
+
 func TestUNCPathHasRootRequiresBoundary(t *testing.T) {
 	if !uncPathHasRoot(`\\server\share\dir\file.msi`, `\\server\share`) {
 		t.Fatal("expected root match")

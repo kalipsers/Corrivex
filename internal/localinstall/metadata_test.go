@@ -21,3 +21,13 @@ func TestAnalyzePathHandlesMSI(t *testing.T) {
 		t.Fatalf("version=%q", got.Version)
 	}
 }
+
+func TestAnalyzePathDropsArchitectureAfterVersion(t *testing.T) {
+	got := AnalyzePath(`\\192.168.100.41\updater\rustdesk-1.4.6-x86_64.msi`)
+	if got.Name != "rustdesk" {
+		t.Fatalf("name=%q", got.Name)
+	}
+	if got.Version != "1.4.6" {
+		t.Fatalf("version=%q", got.Version)
+	}
+}

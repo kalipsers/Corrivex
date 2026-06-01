@@ -51,7 +51,7 @@ func cleanInstallerName(s string) string {
 	for _, w := range words {
 		lw := strings.ToLower(strings.Trim(w, "()[]{}"))
 		switch lw {
-		case "setup", "installer", "install", "x64", "x86", "win64", "win32", "windows", "amd64":
+		case "setup", "installer", "install", "x64", "x86", "x86-64", "x86_64", "64", "32", "win64", "win32", "windows", "amd64", "arm64", "aarch64":
 			continue
 		default:
 			out = append(out, w)
