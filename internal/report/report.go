@@ -1,6 +1,6 @@
 // Package report encodes Corrivex's core data sets (installed software,
-// local administrators, CVE findings) into downloadable formats. CSV + JSON
-// are implemented in-process; PDF is planned for a later slice.
+// local administrators, CVE findings, update history) into downloadable
+// formats.
 //
 // Callers pass already-loaded data in from the db package — this package
 // never talks to the database so it's trivially testable and easy to evolve
@@ -140,6 +140,62 @@ func CVEFindings(rows []db.CVEHostFinding, format Format, scope string) (*Output
 		}
 		return &Output{Body: buf.Bytes(), ContentType: "text/csv; charset=utf-8",
 			Filename: reportFilename("cve_findings", scope, "csv")}, nil
+	}
+	return nil, fmt.Errorf("unsupported format %q", format)
+}
+
+// -- Update history ---------------------------------------------------------
+
+// UpdateHistory encodes date-range update/change audit rows. It uses both
+// detected inventory changes and task-only update records supplied by db.
+func UpdateHistory(rows []db.UpdateReportRow, format Format, scope string) (*Output, error) {
+	switch format {
+	case FormatJSON:
+		return jsonOutput(rows, reportFilename("update_history", scope, "json"))
+	case FormatCSV:
+		var buf bytes.Buffer
+		buf.Write(utf8BOM)
+		w := csv.NewWriter(&buf)
+		_ = w.Write([]string{"detected_at", "hostname", "package_id", "package_name", "change_type",
+			"old_version", "new_version", "method", "source", "task_id", "task_type", "task_status",
+			"task_result", "task_created_at", "task_completed_at"})
+		for _, r := range rows {
+			taskID := ""
+			if r.TaskID > 0 {
+				taskID = strconv.FormatInt(r.TaskID, 10)
+			}
+			taskCreated := ""
+			if r.TaskCreatedAt != nil {
+				taskCreated = r.TaskCreatedAt.UTC().Format(time.RFC3339)
+			}
+			taskCompleted := ""
+			if r.TaskCompletedAt != nil {
+				taskCompleted = r.TaskCompletedAt.UTC().Format(time.RFC3339)
+			}
+			_ = w.Write([]string{
+				r.DetectedAt.UTC().Format(time.RFC3339),
+				r.Hostname,
+				r.PackageID,
+				r.PackageName,
+				r.ChangeType,
+				r.OldVersion,
+				r.NewVersion,
+				r.Method,
+				r.Source,
+				taskID,
+				r.TaskType,
+				r.TaskStatus,
+				r.TaskResult,
+				taskCreated,
+				taskCompleted,
+			})
+		}
+		w.Flush()
+		if err := w.Error(); err != nil {
+			return nil, err
+		}
+		return &Output{Body: buf.Bytes(), ContentType: "text/csv; charset=utf-8",
+			Filename: reportFilename("update_history", scope, "csv")}, nil
 	}
 	return nil, fmt.Errorf("unsupported format %q", format)
 }

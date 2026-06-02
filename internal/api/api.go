@@ -1366,25 +1366,14 @@ func (s *Server) fleetUpdates(w http.ResponseWriter, r *http.Request) {
 	if s.Hub != nil {
 		online = s.Hub.OnlineHosts()
 	}
-	groups := map[string]*fleetUpdateGroup{}
+	var candidates []fleetUpdateHost
 	seenHostTask := map[string]bool{}
 	add := func(h fleetUpdateHost) {
 		if h.Hostname == "" || h.TaskType == "" || h.TaskPackageID == "" {
 			return
 		}
-		key := strings.ToLower(h.Source + "|" + h.PackageID + "|" + h.PackageName + "|" + h.AvailableVersion)
-		g := groups[key]
-		if g == nil {
-			g = &fleetUpdateGroup{
-				Key:              key,
-				Name:             h.PackageName,
-				Source:           h.Source,
-				PackageID:        h.PackageID,
-				AvailableVersion: h.AvailableVersion,
-			}
-			groups[key] = g
-		}
-		g.Hosts = append(g.Hosts, h)
+		h.PackageName = fleetUpdateDisplayName(h.PackageID, h.PackageName)
+		candidates = append(candidates, h)
 		seenHostTask[strings.ToLower(h.Hostname+"|"+h.TaskType+"|"+h.TaskPackageID)] = true
 	}
 	for _, pc := range pcs {
@@ -1447,6 +1436,22 @@ func (s *Server) fleetUpdates(w http.ResponseWriter, r *http.Request) {
 			Online:           online[row.Hostname],
 		})
 	}
+	groups := map[string]*fleetUpdateGroup{}
+	for _, h := range collapseFleetUpdateCandidates(candidates) {
+		key := strings.ToLower(fleetUpdateProductKey(h.PackageID, h.PackageName) + "|" + h.Source + "|" + h.AvailableVersion)
+		g := groups[key]
+		if g == nil {
+			g = &fleetUpdateGroup{
+				Key:              key,
+				Name:             h.PackageName,
+				Source:           h.Source,
+				PackageID:        h.PackageID,
+				AvailableVersion: h.AvailableVersion,
+			}
+			groups[key] = g
+		}
+		g.Hosts = append(g.Hosts, h)
+	}
 	out := make([]fleetUpdateGroup, 0, len(groups))
 	for _, g := range groups {
 		sort.Slice(g.Hosts, func(i, j int) bool {
@@ -1465,6 +1470,153 @@ func (s *Server) fleetUpdates(w http.ResponseWriter, r *http.Request) {
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	writeJSON(w, 200, out)
+}
+
+func collapseFleetUpdateCandidates(candidates []fleetUpdateHost) []fleetUpdateHost {
+	byHostProduct := map[string][]fleetUpdateHost{}
+	for _, h := range candidates {
+		key := strings.ToLower(h.Hostname + "|" + fleetUpdateProductKey(h.PackageID, h.PackageName))
+		byHostProduct[key] = append(byHostProduct[key], h)
+	}
+	out := make([]fleetUpdateHost, 0, len(byHostProduct))
+	for _, rows := range byHostProduct {
+		out = append(out, preferredFleetUpdate(rows))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].PackageName != out[j].PackageName {
+			return strings.ToLower(out[i].PackageName) < strings.ToLower(out[j].PackageName)
+		}
+		return strings.ToLower(out[i].Hostname) < strings.ToLower(out[j].Hostname)
+	})
+	return out
+}
+
+func preferredFleetUpdate(candidates []fleetUpdateHost) fleetUpdateHost {
+	if len(candidates) == 0 {
+		return fleetUpdateHost{}
+	}
+	local, hasLocal := bestFleetCandidate(candidates, func(h fleetUpdateHost) bool { return h.Source == "local" })
+	winget, hasWinget := bestFleetCandidate(candidates, func(h fleetUpdateHost) bool { return h.Source != "local" })
+	if hasLocal && (!hasWinget || compareFleetVersions(local.AvailableVersion, winget.AvailableVersion) >= 0) {
+		return local
+	}
+	if hasWinget {
+		return winget
+	}
+	return candidates[0]
+}
+
+func bestFleetCandidate(candidates []fleetUpdateHost, keep func(fleetUpdateHost) bool) (fleetUpdateHost, bool) {
+	var best fleetUpdateHost
+	ok := false
+	for _, h := range candidates {
+		if !keep(h) {
+			continue
+		}
+		if !ok || compareFleetVersions(h.AvailableVersion, best.AvailableVersion) > 0 ||
+			(compareFleetVersions(h.AvailableVersion, best.AvailableVersion) == 0 && h.Source == "local" && best.Source != "local") {
+			best = h
+			ok = true
+		}
+	}
+	return best, ok
+}
+
+func fleetUpdateProductKey(packageID, name string) string {
+	if n := normalizeFleetProductName(name); n != "" {
+		return n
+	}
+	if packageID == "" {
+		return ""
+	}
+	parts := strings.FieldsFunc(strings.ToLower(packageID), func(r rune) bool {
+		return r == '.' || r == ':' || r == '\\' || r == '/' || r == '_' || r == '-'
+	})
+	if len(parts) == 0 {
+		return strings.ToLower(packageID)
+	}
+	return normalizeFleetProductName(parts[len(parts)-1])
+}
+
+func fleetUpdateDisplayName(packageID, name string) string {
+	name = stripFleetVersionFromName(name)
+	if name != "" {
+		return name
+	}
+	if packageID == "" {
+		return ""
+	}
+	parts := strings.FieldsFunc(packageID, func(r rune) bool {
+		return r == '.' || r == ':' || r == '\\' || r == '/'
+	})
+	if len(parts) == 0 {
+		return packageID
+	}
+	return strings.ReplaceAll(parts[len(parts)-1], "_", " ")
+}
+
+var (
+	fleetParenRe  = regexp.MustCompile(`\s*\([^)]*\)`)
+	fleetVerRe    = regexp.MustCompile(`\b\d+(?:[._-]\d+)+\b`)
+	fleetSpacesRe = regexp.MustCompile(`\s+`)
+)
+
+func stripFleetVersionFromName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	name = fleetParenRe.ReplaceAllString(name, " ")
+	name = fleetVerRe.ReplaceAllString(name, " ")
+	name = strings.Trim(name, " -_\t\r\n")
+	name = fleetSpacesRe.ReplaceAllString(name, " ")
+	return strings.TrimSpace(name)
+}
+
+func normalizeFleetProductName(name string) string {
+	name = strings.ToLower(stripFleetVersionFromName(name))
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func compareFleetVersions(a, b string) int {
+	ap := fleetVersionParts(a)
+	bp := fleetVersionParts(b)
+	n := len(ap)
+	if len(bp) > n {
+		n = len(bp)
+	}
+	for i := 0; i < n; i++ {
+		av, bv := 0, 0
+		if i < len(ap) {
+			av = ap[i]
+		}
+		if i < len(bp) {
+			bv = bp[i]
+		}
+		if av > bv {
+			return 1
+		}
+		if av < bv {
+			return -1
+		}
+	}
+	return 0
+}
+
+func fleetVersionParts(v string) []int {
+	raw := regexp.MustCompile(`\d+`).FindAllString(v, -1)
+	out := make([]int, 0, len(raw))
+	for _, p := range raw {
+		n, _ := strconv.Atoi(p)
+		out = append(out, n)
+	}
+	return out
 }
 
 func stringFromAnyAPI(v any) string {
@@ -1782,9 +1934,10 @@ func (s *Server) reportsSummary(w http.ResponseWriter, r *http.Request) {
 // downloadReport assembles an export and streams it back with a
 // Content-Disposition filename. Query parameters:
 //
-//	type   = installed_software | local_admins | cve_findings
+//	type   = installed_software | local_admins | cve_findings | update_history
 //	format = csv | json
-//	scope  = all (default) | host=HOST (single host, only for installed_software + cve_findings)
+//	scope  = all (default) | host=HOST (single host, only for installed_software + cve_findings + update_history)
+//	from/to = YYYY-MM-DD date range for update_history; defaults to last 30 days.
 func (s *Server) downloadReport(w http.ResponseWriter, r *http.Request) {
 	typ := r.URL.Query().Get("type")
 	format := report.Format(r.URL.Query().Get("format"))
@@ -1805,6 +1958,7 @@ func (s *Server) downloadReport(w http.ResponseWriter, r *http.Request) {
 		softwareRows []db.InstalledSoftware
 		adminsRows   []db.LocalAdminEntry
 		cveRows      []db.CVEHostFinding
+		updateRows   []db.UpdateReportRow
 	)
 
 	// The "generated by" byline on HTML exports. requireRoleReq has
@@ -1888,8 +2042,34 @@ func (s *Server) downloadReport(w http.ResponseWriter, r *http.Request) {
 		default:
 			out, err = report.CVEFindings(cveRows, format, scope)
 		}
+	case "update_history":
+		from, to, rangeLabel, perr := parseReportDateRange(r)
+		if perr != nil {
+			writeJSON(w, 400, map[string]string{"error": perr.Error()})
+			return
+		}
+		updateRows, err = s.DB.UpdateReport(from, to, host)
+		if err != nil {
+			break
+		}
+		updateScope := scope + "_" + rangeLabel
+		switch format {
+		case report.FormatHTML:
+			out, err = report.HTML(typ, updateRows, updateScope, generatedBy)
+		case report.FormatPDF:
+			out, err = report.PDF(typ, updateRows, updateScope, generatedBy)
+		case report.FormatPDFZip:
+			hosts, herr := s.DB.AllHostnames()
+			if herr != nil {
+				err = herr
+				break
+			}
+			out, err = report.PDFZip(typ, updateRows, hosts, updateScope, generatedBy)
+		default:
+			out, err = report.UpdateHistory(updateRows, format, updateScope)
+		}
 	default:
-		writeJSON(w, 400, map[string]string{"error": "unknown report type; expected installed_software | local_admins | cve_findings"})
+		writeJSON(w, 400, map[string]string{"error": "unknown report type; expected installed_software | local_admins | cve_findings | update_history"})
 		return
 	}
 	if err != nil {
@@ -1907,6 +2087,34 @@ func (s *Server) downloadReport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(200)
 	w.Write(out.Body)
+}
+
+func parseReportDateRange(r *http.Request) (time.Time, time.Time, string, error) {
+	now := time.Now().UTC()
+	to := now
+	from := now.AddDate(0, 0, -30)
+	fromRaw := strings.TrimSpace(r.URL.Query().Get("from"))
+	toRaw := strings.TrimSpace(r.URL.Query().Get("to"))
+	if fromRaw != "" {
+		v, err := time.Parse("2006-01-02", fromRaw)
+		if err != nil {
+			return time.Time{}, time.Time{}, "", fmt.Errorf("invalid from date; expected YYYY-MM-DD")
+		}
+		from = v
+	}
+	toLabel := to.Format("2006-01-02")
+	if toRaw != "" {
+		v, err := time.Parse("2006-01-02", toRaw)
+		if err != nil {
+			return time.Time{}, time.Time{}, "", fmt.Errorf("invalid to date; expected YYYY-MM-DD")
+		}
+		to = v.AddDate(0, 0, 1)
+		toLabel = v.Format("2006-01-02")
+	}
+	if !from.Before(to) {
+		return time.Time{}, time.Time{}, "", fmt.Errorf("from date must be before to date")
+	}
+	return from, to, from.Format("2006-01-02") + "_to_" + toLabel, nil
 }
 
 // rescanCVEs wakes the scanner. Admin-only. Returns immediately — the

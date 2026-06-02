@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -2843,6 +2844,28 @@ type LocalAdminEntry struct {
 	Enabled     bool   `json:"enabled"`
 }
 
+// UpdateReportRow is one audit row for the Reports tab update-history export.
+// Rows are derived from existing tables only: installed_software_history for
+// detected version changes, and tasks for best-effort "how was this triggered"
+// context. No report-specific persistence is required.
+type UpdateReportRow struct {
+	Hostname        string     `json:"hostname"`
+	PackageID       string     `json:"package_id"`
+	PackageName     string     `json:"package_name"`
+	OldVersion      string     `json:"old_version"`
+	NewVersion      string     `json:"new_version"`
+	ChangeType      string     `json:"change_type"`
+	DetectedAt      time.Time  `json:"detected_at"`
+	Source          string     `json:"source"`
+	Method          string     `json:"method"`
+	TaskID          int64      `json:"task_id,omitempty"`
+	TaskType        string     `json:"task_type,omitempty"`
+	TaskStatus      string     `json:"task_status,omitempty"`
+	TaskResult      string     `json:"task_result,omitempty"`
+	TaskCreatedAt   *time.Time `json:"task_created_at,omitempty"`
+	TaskCompletedAt *time.Time `json:"task_completed_at,omitempty"`
+}
+
 // LocalAdminsAllHosts returns every (host, admin account) pair across the
 // fleet. `pcs.local_admins` is a JSON blob populated by the agent's full
 // scan; we decode it per host and flatten into one entry per account.
@@ -2959,6 +2982,219 @@ func (d *DB) AllCVEFindings() ([]CVEHostFinding, error) {
 		}
 	}
 	return out, rows.Err()
+}
+
+// UpdateReport returns update/change audit rows for [from, to). It uses only
+// existing task and installed-software history data, so precision is limited to
+// what agents have already reported.
+func (d *DB) UpdateReport(from, to time.Time, hostname string) ([]UpdateReportRow, error) {
+	history, err := d.softwareHistoryRange(from, to, hostname)
+	if err != nil {
+		return nil, err
+	}
+	tasks, err := d.updateTasksRange(from, to, hostname)
+	if err != nil {
+		return nil, err
+	}
+	usedTasks := map[int64]bool{}
+	out := make([]UpdateReportRow, 0, len(history)+len(tasks))
+	for _, h := range history {
+		row := UpdateReportRow{
+			Hostname:    h.Hostname,
+			PackageID:   h.PackageID,
+			PackageName: h.PackageName,
+			OldVersion:  h.OldVersion,
+			NewVersion:  h.NewVersion,
+			ChangeType:  h.ChangeType,
+			DetectedAt:  h.DetectedAt,
+			Source:      "installed_software_history",
+			Method:      "inventory scan / external change",
+		}
+		if t := bestTaskForHistory(h, tasks); t != nil {
+			usedTasks[t.ID] = true
+			row.TaskID = t.ID
+			row.TaskType = t.Type
+			row.TaskStatus = t.Status
+			row.TaskCreatedAt = &t.CreatedAt
+			row.TaskCompletedAt = t.CompletedAt
+			row.Method = methodForTask(*t)
+			if t.Result != nil {
+				row.TaskResult = *t.Result
+			}
+		}
+		out = append(out, row)
+	}
+	for _, t := range tasks {
+		if usedTasks[t.ID] {
+			continue
+		}
+		when := taskReportTime(t)
+		pid, pname, pver := taskPkgFields(t)
+		result := ""
+		if t.Result != nil {
+			result = *t.Result
+		}
+		out = append(out, UpdateReportRow{
+			Hostname:        t.Hostname,
+			PackageID:       pid,
+			PackageName:     pname,
+			NewVersion:      pver,
+			ChangeType:      "task",
+			DetectedAt:      when,
+			Source:          "tasks",
+			Method:          methodForTask(t),
+			TaskID:          t.ID,
+			TaskType:        t.Type,
+			TaskStatus:      t.Status,
+			TaskResult:      result,
+			TaskCreatedAt:   &t.CreatedAt,
+			TaskCompletedAt: t.CompletedAt,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].DetectedAt.Equal(out[j].DetectedAt) {
+			return out[i].DetectedAt.After(out[j].DetectedAt)
+		}
+		if out[i].Hostname != out[j].Hostname {
+			return strings.ToLower(out[i].Hostname) < strings.ToLower(out[j].Hostname)
+		}
+		return strings.ToLower(out[i].PackageID) < strings.ToLower(out[j].PackageID)
+	})
+	return out, nil
+}
+
+func (d *DB) softwareHistoryRange(from, to time.Time, hostname string) ([]SoftwareHistory, error) {
+	q := "SELECT id, hostname, package_id, package_name, old_version, new_version, change_type, detected_at FROM installed_software_history WHERE detected_at>=? AND detected_at<?"
+	args := []any{from, to}
+	if hostname != "" {
+		q += " AND hostname=?"
+		args = append(args, hostname)
+	}
+	q += " ORDER BY detected_at DESC, id DESC"
+	rows, err := d.sql.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SoftwareHistory
+	for rows.Next() {
+		var h SoftwareHistory
+		var pname, ov, nv sql.NullString
+		if err := rows.Scan(&h.ID, &h.Hostname, &h.PackageID, &pname, &ov, &nv, &h.ChangeType, &h.DetectedAt); err != nil {
+			return nil, err
+		}
+		h.PackageName = pname.String
+		h.OldVersion = ov.String
+		h.NewVersion = nv.String
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) updateTasksRange(from, to time.Time, hostname string) ([]Task, error) {
+	q := `SELECT id, hostname, type, package_id, package_name, package_version, status, created_at, delivered_at, completed_at, result
+		  FROM tasks
+		 WHERE type IN ('upgrade_all','upgrade_package','install_package','local_install','windows_update_all','windows_update_single')
+		   AND COALESCE(completed_at, delivered_at, created_at)>=?
+		   AND COALESCE(completed_at, delivered_at, created_at)<?`
+	args := []any{from, to}
+	if hostname != "" {
+		q += " AND hostname=?"
+		args = append(args, hostname)
+	}
+	q += " ORDER BY COALESCE(completed_at, delivered_at, created_at) DESC, id DESC"
+	rows, err := d.sql.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Task
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.Hostname, &t.Type, &t.PackageID, &t.PackageName, &t.PackageVersion,
+			&t.Status, &t.CreatedAt, &t.DeliveredAt, &t.CompletedAt, &t.Result); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func bestTaskForHistory(h SoftwareHistory, tasks []Task) *Task {
+	var best *Task
+	bestScore := 999
+	for i := range tasks {
+		t := &tasks[i]
+		if !strings.EqualFold(t.Hostname, h.Hostname) {
+			continue
+		}
+		when := taskReportTime(*t)
+		if when.Before(h.DetectedAt.Add(-24*time.Hour)) || when.After(h.DetectedAt.Add(2*time.Hour)) {
+			continue
+		}
+		score := 50
+		if t.PackageID != nil && strings.EqualFold(*t.PackageID, h.PackageID) {
+			score = 0
+		} else if t.PackageName != nil && h.PackageName != "" && strings.Contains(strings.ToLower(h.PackageName), strings.ToLower(*t.PackageName)) {
+			score = 5
+		} else {
+			switch t.Type {
+			case "upgrade_all":
+				score = 10
+			case "local_install", "upgrade_package", "install_package":
+				score = 20
+			case "windows_update_all", "windows_update_single":
+				continue
+			}
+		}
+		if score < bestScore || (score == bestScore && best != nil && when.After(taskReportTime(*best))) {
+			best = t
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func taskReportTime(t Task) time.Time {
+	if t.CompletedAt != nil {
+		return *t.CompletedAt
+	}
+	if t.DeliveredAt != nil {
+		return *t.DeliveredAt
+	}
+	return t.CreatedAt
+}
+
+func taskPkgFields(t Task) (string, string, string) {
+	pid, pname, pver := "", "", ""
+	if t.PackageID != nil {
+		pid = *t.PackageID
+	}
+	if t.PackageName != nil {
+		pname = *t.PackageName
+	}
+	if t.PackageVersion != nil {
+		pver = *t.PackageVersion
+	}
+	return pid, pname, pver
+}
+
+func methodForTask(t Task) string {
+	switch t.Type {
+	case "upgrade_all":
+		return "winget upgrade all"
+	case "upgrade_package":
+		return "winget package upgrade"
+	case "install_package":
+		return "winget install"
+	case "local_install":
+		return "SMB/local installer"
+	case "windows_update_all":
+		return "Windows Update install all"
+	case "windows_update_single":
+		return "Windows Update single update"
+	}
+	return t.Type
 }
 
 // ReportSummary is the set of counters rendered in the Reports tab top cards.

@@ -1109,6 +1109,31 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
     </div>
 
     <div class="card" style="margin-bottom:16px">
+      <div class="card-hd"><div class="card-title">Update history</div>
+        <div class="sub" style="font-size:12px">Detected software changes and update tasks from the selected date range.</div>
+      </div>
+      <div class="card-bd" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+        <label class="sub" style="font-size:12px">Scope
+          <select class="input" id="rep-updates-scope" style="margin-left:8px;min-width:220px">
+            <option value="all">Entire fleet</option>
+          </select>
+        </label>
+        <label class="sub" style="font-size:12px">From
+          <input type="date" class="input" id="rep-updates-from" style="margin-left:8px;min-width:150px">
+        </label>
+        <label class="sub" style="font-size:12px">To
+          <input type="date" class="input" id="rep-updates-to" style="margin-left:8px;min-width:150px">
+        </label>
+        <span style="flex:1"></span>
+        <a class="btn btn-sm btn-primary" id="rep-updates-pdf" download>PDF</a>
+        <a class="btn btn-sm btn-primary" id="rep-updates-pdfzip" download>ZIP (per-host PDFs)</a>
+        <a class="btn btn-sm btn-ghost" id="rep-updates-html" target="_blank" rel="noopener">HTML</a>
+        <a class="btn btn-sm btn-ghost" id="rep-updates-csv" download>CSV</a>
+        <a class="btn btn-sm btn-ghost" id="rep-updates-json" download>JSON</a>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
       <div class="card-hd"><div class="card-title">Local administrators</div>
         <div class="sub" style="font-size:12px">Fleet-wide flattened list of every (host, admin account) pair captured on the last full scan.</div>
       </div>
@@ -3067,7 +3092,7 @@ function populateReportsHostSelectors() {
     if (h) hosts.push(h);
   });
   hosts.sort((a, b) => a.localeCompare(b));
-  ['rep-software-scope', 'rep-cve-scope'].forEach(id => {
+  ['rep-software-scope', 'rep-updates-scope', 'rep-cve-scope'].forEach(id => {
     const sel = document.getElementById(id);
     if (!sel) return;
     // Preserve the "Entire fleet" option at the top and append hosts.
@@ -3081,12 +3106,19 @@ function populateReportsHostSelectors() {
 }
 
 function updateReportLinks() {
-  const build = (type, fmt, scope) => {
+  initUpdateReportDates();
+  const build = (type, fmt, scope, extra = {}) => {
     let u = '/api/?action=report&type=' + encodeURIComponent(type) + '&format=' + fmt;
     if (scope && scope !== 'all') u += '&host=' + encodeURIComponent(scope);
+    for (const [k, v] of Object.entries(extra)) {
+      if (v) u += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(v);
+    }
     return u;
   };
   const swScope = document.getElementById('rep-software-scope')?.value || 'all';
+  const updScope = document.getElementById('rep-updates-scope')?.value || 'all';
+  const updFrom = document.getElementById('rep-updates-from')?.value || '';
+  const updTo = document.getElementById('rep-updates-to')?.value || '';
   const cveScope = document.getElementById('rep-cve-scope')?.value || 'all';
   const set = (id, href, disabled) => {
     const el = document.getElementById(id);
@@ -3110,11 +3142,32 @@ function updateReportLinks() {
   set('rep-software-pdf',    build('installed_software', 'pdf',    swScope));
   set('rep-software-pdfzip', build('installed_software', 'pdfzip', 'all'), swScope !== 'all');
 
+  const updExtra = { from: updFrom, to: updTo };
+  set('rep-updates-csv',    build('update_history', 'csv',    updScope, updExtra));
+  set('rep-updates-json',   build('update_history', 'json',   updScope, updExtra));
+  set('rep-updates-html',   build('update_history', 'html',   updScope, updExtra));
+  set('rep-updates-pdf',    build('update_history', 'pdf',    updScope, updExtra));
+  set('rep-updates-pdfzip', build('update_history', 'pdfzip', 'all', updExtra), updScope !== 'all');
+
   set('rep-cve-csv',    build('cve_findings', 'csv',    cveScope));
   set('rep-cve-json',   build('cve_findings', 'json',   cveScope));
   set('rep-cve-html',   build('cve_findings', 'html',   cveScope));
   set('rep-cve-pdf',    build('cve_findings', 'pdf',    cveScope));
   set('rep-cve-pdfzip', build('cve_findings', 'pdfzip', 'all'), cveScope !== 'all');
+}
+
+function initUpdateReportDates() {
+  const from = document.getElementById('rep-updates-from');
+  const to = document.getElementById('rep-updates-to');
+  if (!from || !to || from.dataset.initialized === '1') return;
+  const today = new Date();
+  const start = new Date(today);
+  start.setDate(start.getDate() - 30);
+  const iso = d => d.toISOString().slice(0, 10);
+  from.value = iso(start);
+  to.value = iso(today);
+  from.dataset.initialized = '1';
+  to.dataset.initialized = '1';
 }
 
 async function loadReportsSummary() {
@@ -3140,7 +3193,7 @@ document.addEventListener('click', e => {
   }
 });
 document.addEventListener('change', e => {
-  if (e.target.id === 'rep-software-scope' || e.target.id === 'rep-cve-scope') {
+  if (e.target.id === 'rep-software-scope' || e.target.id === 'rep-updates-scope' || e.target.id === 'rep-updates-from' || e.target.id === 'rep-updates-to' || e.target.id === 'rep-cve-scope') {
     updateReportLinks();
   }
 });

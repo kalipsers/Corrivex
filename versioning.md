@@ -55,6 +55,16 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.15.0 - Update history reports
+
+**Minor** - adds date-range reporting for software and update activity.
+
+- Reports tab now includes an **Update history** export with fleet/host scope and from/to date controls.
+- The report uses only existing `installed_software_history` and `tasks` data; no DB schema changes are required.
+- Exports include CSV, JSON, HTML, PDF, and per-host PDF ZIP formats.
+- Updates tab now groups all older installed versions of the same software under one update target.
+- When SMB/local and winget update candidates both exist for the same software on a host, SMB/local is shown only when its available version is the same or newer than winget.
+
 ### 1.14.1 - Fleet update-all buttons
 
 **Patch** - corrects the device update shortcut placement.

@@ -115,6 +115,8 @@ func rowsCount(kind string, rows any) int {
 		return len(asAdmins(rows))
 	case "cve_findings":
 		return len(asCVEs(rows))
+	case "update_history":
+		return len(asUpdates(rows))
 	}
 	return 0
 }

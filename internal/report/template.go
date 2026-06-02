@@ -269,6 +269,8 @@ table.tbl tbody tr:nth-child(even) { background: #fcfcfd; }
 {{- template "localAdmins" . -}}
 {{else if eq .Kind "cve_findings"}}
 {{- template "cveFindings" . -}}
+{{else if eq .Kind "update_history"}}
+{{- template "updateHistory" . -}}
 {{end}}
 
 <footer class="footer">
@@ -392,6 +394,47 @@ if (new URLSearchParams(location.search).get('print') === '1') {
     </tr>
     {{else}}
     <tr><td colspan="7" class="muted" style="text-align:center;padding:40px">No CVE findings. Either the scanner has not run yet, or all installed packages are at up-to-date, non-vulnerable versions.</td></tr>
+    {{end}}
+  </tbody>
+</table>
+</div>
+{{end}}
+
+{{define "updateHistory"}}
+<div class="tbl-wrap">
+<table class="tbl">
+  <thead>
+    <tr>
+      <th>When</th>
+      <th>Host</th>
+      <th>Package</th>
+      <th>Change</th>
+      <th>From</th>
+      <th>To</th>
+      <th>How</th>
+      <th>Task result</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Rows}}
+    <tr>
+      <td class="mono muted">{{fmtTime .DetectedAt}}</td>
+      <td class="strong">{{.Hostname}}</td>
+      <td>
+        <div class="strong">{{defaultStr .PackageName .PackageID}}</div>
+        <div class="mono muted" style="font-size:11px">{{defaultStr .PackageID "—"}}</div>
+      </td>
+      <td><span class="chip chip-unk">{{.ChangeType}}</span></td>
+      <td class="mono">{{defaultStr .OldVersion "—"}}</td>
+      <td class="mono">{{defaultStr .NewVersion "—"}}</td>
+      <td>
+        <div>{{defaultStr .Method "—"}}</div>
+        {{if .TaskID}}<div class="mono muted" style="font-size:11px">task #{{.TaskID}} · {{.TaskType}} · {{.TaskStatus}}</div>{{end}}
+      </td>
+      <td style="max-width:320px">{{defaultStr .TaskResult "—"}}</td>
+    </tr>
+    {{else}}
+    <tr><td colspan="8" class="muted" style="text-align:center;padding:40px">No update history is available for this date range.</td></tr>
     {{end}}
   </tbody>
 </table>

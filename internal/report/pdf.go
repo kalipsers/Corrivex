@@ -79,7 +79,7 @@ func buildPDF(kind string, rows any, scope, user string) ([]byte, error) {
 
 	// Landscape for wide-column reports; portrait for local_admins.
 	orient := orientation.Vertical
-	if kind == "installed_software" || kind == "cve_findings" {
+	if kind == "installed_software" || kind == "cve_findings" || kind == "update_history" {
 		orient = orientation.Horizontal
 	}
 
@@ -175,6 +175,8 @@ func buildPDF(kind string, rows any, scope, user string) ([]byte, error) {
 		renderAdminsTable(m, asAdmins(rows))
 	case "cve_findings":
 		renderCVETable(m, asCVEs(rows))
+	case "update_history":
+		renderUpdateTable(m, asUpdates(rows))
 	default:
 		return nil, fmt.Errorf("unsupported pdf kind %q", kind)
 	}
@@ -297,6 +299,45 @@ func renderCVETable(m core.Maroto, rows []db.CVEHostFinding) {
 	}
 }
 
+func renderUpdateTable(m core.Maroto, rows []db.UpdateReportRow) {
+	addTableHead(m, []tableCol{
+		{"WHEN", 2}, {"HOST", 2}, {"PACKAGE", 3}, {"CHANGE", 1}, {"FROM", 1}, {"TO", 1}, {"HOW / RESULT", 2},
+	})
+	brk := breakline.DashStrategy
+	for i, r := range rows {
+		bg := (*props.Color)(nil)
+		if i%2 == 1 {
+			bg = &zebraColor
+		}
+		changeColor := &inkColor2
+		if r.ChangeType == "updated" || r.ChangeType == "installed" {
+			changeColor = &okColor
+		} else if r.ChangeType == "removed" || r.TaskStatus == "failed" || r.TaskStatus == "timeout" {
+			changeColor = &dangerColor
+		}
+		method := r.Method
+		if r.TaskResult != "" {
+			method += " - " + r.TaskResult
+		}
+		m.AddRow(6,
+			text.NewCol(2, r.DetectedAt.UTC().Format("2006-01-02 15:04"),
+				props.Text{Size: 6, Family: fontMono, Color: &mutedColor, Left: 2, Top: 1.5}),
+			text.NewCol(2, truncate(r.Hostname, 24),
+				props.Text{Size: 7, Style: fontstyle.Bold, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+			text.NewCol(3, truncate(orDefault(r.PackageName, r.PackageID), 42),
+				props.Text{Size: 7, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+			text.NewCol(1, truncate(r.ChangeType, 12),
+				props.Text{Size: 6, Style: fontstyle.Bold, Color: changeColor, Left: 2, Top: 1.5}),
+			text.NewCol(1, truncate(orDefault(r.OldVersion, "—"), 14),
+				props.Text{Size: 6, Family: fontMono, Left: 2, Top: 1.5}),
+			text.NewCol(1, truncate(orDefault(r.NewVersion, "—"), 14),
+				props.Text{Size: 6, Family: fontMono, Left: 2, Top: 1.5}),
+			text.NewCol(2, truncate(method, 90),
+				props.Text{Size: 6, Color: &inkColor2, Left: 2, Top: 1.5, BreakLineStrategy: brk}),
+		).WithStyle(&props.Cell{BackgroundColor: bg})
+	}
+}
+
 // ---- helpers ------------------------------------------------------------
 
 func orDefault(s, def string) string {
@@ -339,6 +380,7 @@ func sevDisplay(s string) (string, *props.Color) {
 func asSoftware(r any) []db.InstalledSoftware { v, _ := r.([]db.InstalledSoftware); return v }
 func asAdmins(r any) []db.LocalAdminEntry     { v, _ := r.([]db.LocalAdminEntry); return v }
 func asCVEs(r any) []db.CVEHostFinding        { v, _ := r.([]db.CVEHostFinding); return v }
+func asUpdates(r any) []db.UpdateReportRow    { v, _ := r.([]db.UpdateReportRow); return v }
 
 // titleFor returns the same (title, subtitle) pair html.go uses so the two
 // output formats stay in lockstep.
@@ -350,6 +392,8 @@ func titleFor(kind string) (string, string) {
 		return "Local administrators", "Flattened list of (host, admin account) pairs"
 	case "cve_findings":
 		return "CVE findings", "Known vulnerabilities affecting installed software versions"
+	case "update_history":
+		return "Update history", "Detected software changes and update tasks in the selected date range"
 	}
 	return "Report", ""
 }
@@ -366,6 +410,9 @@ func summaryFor(kind string, rows any) (int, []summaryKV) {
 	case "cve_findings":
 		cv := asCVEs(rows)
 		return len(cv), cveSummary(cv)
+	case "update_history":
+		up := asUpdates(rows)
+		return len(up), updateSummary(up)
 	}
 	return 0, nil
 }
@@ -399,6 +446,14 @@ func PartitionByHost(kind string, rows any) map[string]any {
 		for h, v := range bucket {
 			out[h] = v
 		}
+	case "update_history":
+		bucket := map[string][]db.UpdateReportRow{}
+		for _, r := range asUpdates(rows) {
+			bucket[r.Hostname] = append(bucket[r.Hostname], r)
+		}
+		for h, v := range bucket {
+			out[h] = v
+		}
 	}
 	return out
 }
@@ -413,6 +468,8 @@ func EmptyFor(kind string) any {
 		return []db.LocalAdminEntry{}
 	case "cve_findings":
 		return []db.CVEHostFinding{}
+	case "update_history":
+		return []db.UpdateReportRow{}
 	}
 	return nil
 }

@@ -66,13 +66,18 @@ func cveLinkForID(id string) string {
 }
 
 var funcMap = template.FuncMap{
-	"fmtTime":    func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") },
-	"fmtDate":    func(t time.Time) string { return t.UTC().Format("2006-01-02") },
-	"cveLink":    cveLinkForID,
-	"sevRank":    sevRank,
-	"lower":      func(s string) string { return lowercase(s) },
-	"defaultStr": func(s, def string) string { if s == "" { return def }; return s },
-	"add":        func(a, b int) int { return a + b },
+	"fmtTime": func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") },
+	"fmtDate": func(t time.Time) string { return t.UTC().Format("2006-01-02") },
+	"cveLink": cveLinkForID,
+	"sevRank": sevRank,
+	"lower":   func(s string) string { return lowercase(s) },
+	"defaultStr": func(s, def string) string {
+		if s == "" {
+			return def
+		}
+		return s
+	},
+	"add": func(a, b int) int { return a + b },
 }
 
 // HTML renders the given dataset as a standalone HTML document. `rows` must
@@ -113,6 +118,12 @@ func HTML(kind string, rows any, scope, user string) (*Output, error) {
 		data.Subtitle = "Known vulnerabilities affecting installed software versions"
 		data.TotalRows = len(cv)
 		data.SummaryItems = cveSummary(cv)
+	case "update_history":
+		up, _ := rows.([]db.UpdateReportRow)
+		data.Title = "Update history"
+		data.Subtitle = "Detected software changes and update tasks in the selected date range"
+		data.TotalRows = len(up)
+		data.SummaryItems = updateSummary(up)
 	default:
 		return nil, fmt.Errorf("unsupported html kind %q", kind)
 	}
@@ -178,6 +189,30 @@ func cveSummary(rows []db.CVEHostFinding) []summaryKV {
 		{"Critical", itoa(crit)},
 		{"High", itoa(high)},
 		{"KEV (actively exploited)", itoa(kev)},
+	}
+}
+
+func updateSummary(rows []db.UpdateReportRow) []summaryKV {
+	hosts := map[string]bool{}
+	updated, tasks, failed := 0, 0, 0
+	for _, r := range rows {
+		hosts[r.Hostname] = true
+		if r.ChangeType == "updated" {
+			updated++
+		}
+		if r.Source == "tasks" || r.TaskID > 0 {
+			tasks++
+		}
+		if r.TaskStatus == "failed" || r.TaskStatus == "timeout" {
+			failed++
+		}
+	}
+	return []summaryKV{
+		{"Rows", itoa(len(rows))},
+		{"Hosts represented", itoa(len(hosts))},
+		{"Detected updates", itoa(updated)},
+		{"Task-linked rows", itoa(tasks)},
+		{"Failed tasks", itoa(failed)},
 	}
 }
 

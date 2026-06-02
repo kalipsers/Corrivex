@@ -2,14 +2,14 @@
   "FixedFileInfo": {
     "FileVersion": {
       "Major": 1,
-      "Minor": 14,
-      "Patch": 1,
+      "Minor": 15,
+      "Patch": 0,
       "Build": 0
     },
     "ProductVersion": {
       "Major": 1,
-      "Minor": 14,
-      "Patch": 1,
+      "Minor": 15,
+      "Patch": 0,
       "Build": 0
     },
     "FileFlagsMask": "3f",
@@ -21,12 +21,12 @@
   "StringFileInfo": {
     "CompanyName": "Corrivex",
     "FileDescription": "Corrivex Server — dashboard, API, agent hub",
-    "FileVersion": "1.14.1",
+    "FileVersion": "1.15.0",
     "InternalName": "corrivex-server",
     "LegalCopyright": "© Corrivex contributors",
     "OriginalFilename": "corrivex-server.exe",
     "ProductName": "Corrivex",
-    "ProductVersion": "1.14.1"
+    "ProductVersion": "1.15.0"
   },
   "VarFileInfo": {
     "Translation": {
