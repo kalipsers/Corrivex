@@ -922,6 +922,9 @@ body:not(.is-admin) [data-admin-only] { display: none !important; }
         <button class="btn btn-cta-outline" data-action="fleet-wu-install-all" title="Queue Windows Update install-all on every device">
           Update all Windows
         </button>
+        <button class="btn" data-action="fleet-full-scan" title="Queue a full inventory refresh on every device">
+          Refresh all
+        </button>
         <button class="btn" onclick="location.reload()">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
           Refresh
@@ -2823,7 +2826,7 @@ function openCascadeModal(key) {
     html += '<label class="fleet-host" data-cascade-host="' + escapeHTML(h.hostname) + '">';
     html += '<input type="checkbox" class="cascade-check" data-host="' + escapeHTML(h.hostname) + '"' + checked + disabled + '>';
     html += '<div><div class="fleet-host-title">' + escapeHTML(h.hostname) + ' ' + (h.online ? '<span class="chip online"><span class="dot"></span>online</span>' : '<span class="chip offline"><span class="dot"></span>offline</span>') + '</div>';
-    html += '<div class="fleet-host-meta">' + escapeHTML(h.package_id || '') + '</div></div>';
+    html += '<div class="fleet-host-meta" data-cascade-detail>' + escapeHTML(h.package_id || '') + '</div></div>';
     html += '<span class="pkg-v">' + escapeHTML(h.installed_version || '?') + '</span>';
     html += '<span class="pkg-arrow">-></span><span class="pkg-v"><strong>' + escapeHTML(h.available_version || '?') + '</strong></span>';
     html += '</label>';
@@ -2858,8 +2861,8 @@ function collectFleetHosts() {
 }
 
 function openFleetActionModal(kind) {
-  const taskType = kind === 'windows' ? 'windows_update_all' : 'upgrade_all';
-  const title = kind === 'windows' ? 'Update all Windows' : 'Update all winget';
+  const taskType = kind === 'scan' ? 'full_scan' : (kind === 'windows' ? 'windows_update_all' : 'upgrade_all');
+  const title = kind === 'scan' ? 'Refresh all devices' : (kind === 'windows' ? 'Update all Windows' : 'Update all winget');
   const hosts = collectFleetHosts();
   window.__fleetAction = {
     kind,
@@ -3020,6 +3023,7 @@ async function runCascadeUpdate() {
     const row = document.querySelector('[data-cascade-host="' + cssEscape(h.hostname) + '"]');
     row?.classList.remove('is-failed', 'is-done');
     row?.classList.add('is-running');
+    setCascadeRowDetail(row, 'Queuing task...');
     status.textContent = 'Running ' + h.hostname + ' (' + (done + 1) + '/' + hosts.length + ')';
     try {
       const created = await createTaskQuiet({
@@ -3028,18 +3032,26 @@ async function runCascadeUpdate() {
         package_id: h.task_package_id,
         package_name: h.package_name,
       });
-      const result = await waitForCascadeTask(created.task_id, 75 * 60 * 1000);
+      setCascadeRowDetail(row, 'Task #' + created.task_id + ' queued; verifying active status...');
+      const result = await waitForCascadeTask(created.task_id, {
+        host: h.hostname,
+        timeoutMs: cascadeTimeoutMs(h),
+        row,
+      });
       row?.classList.remove('is-running');
       if (result.status === 'completed') {
         row?.classList.add('is-done');
+        setCascadeRowDetail(row, 'Completed: ' + (result.result || 'ok'));
       } else {
         row?.classList.add('is-failed');
+        setCascadeRowDetail(row, 'Failed: ' + (result.result || result.status));
         const cont = confirm(h.hostname + ' failed: ' + (result.result || result.status) + '\n\nContinue to the next machine?');
         if (!cont) break;
       }
     } catch (err) {
       row?.classList.remove('is-running');
       row?.classList.add('is-failed');
+      setCascadeRowDetail(row, err.message || 'task did not finish');
       const cont = confirm(h.hostname + ' did not finish: ' + err.message + '\n\nContinue to the next machine?');
       if (!cont) break;
     }
@@ -3050,22 +3062,113 @@ async function runCascadeUpdate() {
   await loadFleetUpdates(true);
 }
 
-function waitForCascadeTask(taskID, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cascadeWaiters.delete(String(taskID));
-      reject(new Error('timeout waiting for task result'));
-    }, timeoutMs);
-    cascadeWaiters.set(String(taskID), {
-      resolve: (ev) => { clearTimeout(timeout); resolve(ev); },
+function setCascadeRowDetail(row, text) {
+  const detail = row?.querySelector('[data-cascade-detail]');
+  if (detail) detail.textContent = text || '';
+}
+
+function cascadeTimeoutMs(host) {
+  const configured = parseInt(document.getElementById('s-winget-timeout')?.value || '20', 10);
+  const wingetMinutes = Number.isFinite(configured) && configured > 0 ? configured : 20;
+  const minutes = host?.task_type === 'local_install' ? Math.max(35, wingetMinutes + 10) : Math.max(5, wingetMinutes + 5);
+  return minutes * 60 * 1000;
+}
+
+function cascadeTimeoutLabel(ms) {
+  const minutes = Math.max(1, Math.round(ms / 60000));
+  return minutes + ' minute' + (minutes === 1 ? '' : 's');
+}
+
+function finalTaskStatus(status) {
+  return status === 'completed' || status === 'failed' || status === 'timeout';
+}
+
+async function requestCascadeHostSync(host) {
+  if (!host) return 'unknown';
+  try {
+    const res = await fetch(API + '?action=sync_host', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ hostname: host }),
     });
+    const j = await res.json();
+    if (!res.ok || j.error) throw new Error(j.error || 'HTTP ' + res.status);
+    return j.status || 'requested';
+  } catch {
+    return 'error';
+  }
+}
+
+async function fetchCascadeTaskStatus(taskID, host) {
+  if (!taskID || !host) return null;
+  const res = await fetch(API + '?action=tasks&host=' + encodeURIComponent(host), { credentials: 'same-origin' });
+  if (!res.ok) return null;
+  const tasks = await res.json();
+  if (!Array.isArray(tasks)) return null;
+  return tasks.find(t => String(t.task_id || t.id) === String(taskID)) || null;
+}
+
+function waitForCascadeTask(taskID, options) {
+  const host = options?.host || '';
+  const row = options?.row || null;
+  const timeoutMs = options?.timeoutMs || 30 * 60 * 1000;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let lastSyncAt = 0;
+    const key = String(taskID);
+    const finishResolve = (ev) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      clearInterval(poll);
+      cascadeWaiters.delete(key);
+      resolve(ev);
+    };
+    const finishReject = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      clearInterval(poll);
+      cascadeWaiters.delete(key);
+      reject(err);
+    };
+    const checkNow = async () => {
+      if (settled) return;
+      const now = Date.now();
+      if (host && now - lastSyncAt >= 30000) {
+        lastSyncAt = now;
+        const syncStatus = await requestCascadeHostSync(host);
+        if (syncStatus === 'offline') {
+          setCascadeRowDetail(row, 'Agent offline; waiting for reconnect or task timeout...');
+        }
+      }
+      const task = await fetchCascadeTaskStatus(taskID, host);
+      if (!task) {
+        setCascadeRowDetail(row, 'Task #' + taskID + ' queued; checking status...');
+        return;
+      }
+      const status = normalizeTaskStatus(task.status);
+      setCascadeRowDetail(row, 'Task #' + taskID + ': ' + status + (task.result ? (' - ' + task.result) : ''));
+      if (finalTaskStatus(status)) {
+        finishResolve(Object.assign({}, task, { task_id: task.task_id || task.id || taskID, status }));
+      }
+    };
+    const timeout = setTimeout(() => {
+      finishReject(new Error('timed out waiting for task result after ' + cascadeTimeoutLabel(timeoutMs)));
+    }, timeoutMs);
+    const poll = setInterval(checkNow, 15000);
+    cascadeWaiters.set(key, {
+      resolve: finishResolve,
+    });
+    setTimeout(checkNow, 1000);
   });
 }
 
 function resolveCascadeWaiter(data) {
   if (!data || !data.task_id) return;
   const status = data.status || '';
-  if (status !== 'completed' && status !== 'failed' && status !== 'timeout') return;
+  if (!finalTaskStatus(status)) return;
   const key = String(data.task_id);
   const waiter = cascadeWaiters.get(key);
   if (!waiter) return;
@@ -3758,6 +3861,7 @@ document.addEventListener('click', async (e) => {
   if (a === 'open-cascade') return openCascadeModal(btn.dataset.key);
   if (a === 'fleet-upgrade-all') return openFleetActionModal('winget');
   if (a === 'fleet-wu-install-all') return openFleetActionModal('windows');
+  if (a === 'fleet-full-scan') return openFleetActionModal('scan');
   if (a === 'view') return viewDevice(btn.dataset.host);
   if (a === 'upgrade-all') {
     const host = btn.dataset.host;

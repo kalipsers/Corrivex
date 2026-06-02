@@ -55,6 +55,16 @@ It also surfaces:
 
 Newest first. Each entry lists user-visible changes grouped by bump type.
 
+### 1.16.0 - Fleet refresh and cascade reliability
+
+**Minor** - adds fleet-wide refresh and stronger cascade task monitoring.
+
+- Devices toolbar now includes **Refresh all** to queue a `full_scan` task for every device.
+- The existing fleet status modal tracks queued, running, completed, and failed states for refresh tasks.
+- Full scans reuse the agent inventory path for winget, Windows Update, registry software, SMB/local installers, and dashboard refresh events.
+- Cascade updates now actively request host task snapshots and poll task history while waiting for each host.
+- Cascade waits use bounded timeouts based on the winget package timeout setting, with a longer floor for SMB/local installers.
+
 ### 1.15.0 - Update history reports
 
 **Minor** - adds date-range reporting for software and update activity.
